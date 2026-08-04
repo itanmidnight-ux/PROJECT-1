@@ -50,6 +50,14 @@ def _sysfs_exists(path: str) -> bool:
     return Path(path).exists()
 
 
+def _safe_iterdir(path: Path) -> List[Path]:
+    """List a directory, tolerating sysfs paths SELinux blocks (Termux/Android)."""
+    try:
+        return list(path.iterdir())
+    except (PermissionError, OSError):
+        return []
+
+
 # ── OS / environment ─────────────────────────────────────────────────────────
 
 @dataclass
@@ -154,7 +162,7 @@ def detect_wifi() -> CapabilityInfo:
     wifi_ifaces: List[str] = []
     p = Path("/sys/class/net")
     if p.exists():
-        for iface in p.iterdir():
+        for iface in _safe_iterdir(p):
             if (iface / "wireless").exists() or (iface / "phy80211").exists():
                 wifi_ifaces.append(iface.name)
 
@@ -196,7 +204,7 @@ def detect_bluetooth() -> CapabilityInfo:
     bt_devs: List[str] = []
     p = Path("/sys/class/bluetooth")
     if p.exists():
-        bt_devs = [d.name for d in p.iterdir()]
+        bt_devs = [d.name for d in _safe_iterdir(p)]
 
     # hciconfig fallback
     if not bt_devs and _tool_exists("hciconfig"):
@@ -262,7 +270,7 @@ def _check_sdr_sysfs() -> Dict[str, str]:
     found = {}
     base = Path("/sys/bus/usb/devices")
     if not base.exists(): return found
-    for dev in base.iterdir():
+    for dev in _safe_iterdir(base):
         try:
             vid = (dev / "idVendor").read_text().strip()
             pid = (dev / "idProduct").read_text().strip()

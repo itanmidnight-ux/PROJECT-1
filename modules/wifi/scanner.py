@@ -31,6 +31,14 @@ def _run(cmd: List[str], timeout: int = 15) -> tuple[int, str]:
         return -1, str(e)
 
 
+def _safe_iterdir(path: Path) -> List[Path]:
+    """List a directory, tolerating sysfs paths SELinux blocks (Termux/Android)."""
+    try:
+        return list(path.iterdir())
+    except (PermissionError, OSError):
+        return []
+
+
 # ── Network model ─────────────────────────────────────────────────────────────
 
 @dataclass
@@ -298,7 +306,7 @@ class WiFiScanner:
         ifaces = []
         p = Path("/sys/class/net")
         if p.exists():
-            for iface in p.iterdir():
+            for iface in _safe_iterdir(p):
                 if (iface / "wireless").exists() or (iface / "phy80211").exists():
                     ifaces.append(iface.name)
         if not ifaces:

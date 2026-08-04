@@ -25,6 +25,14 @@ def _run(cmd: List[str], timeout: int = 15) -> tuple[int, str]:
         return -1, str(e)
 
 
+def _safe_iterdir(path: Path) -> List[Path]:
+    """List a directory, tolerating sysfs paths SELinux blocks (Termux/Android)."""
+    try:
+        return list(path.iterdir())
+    except (PermissionError, OSError):
+        return []
+
+
 # ── Models ────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -94,7 +102,7 @@ class BluetoothScanner:
         # sysfs — always works
         p = Path("/sys/class/bluetooth")
         if p.exists():
-            for d in p.iterdir():
+            for d in _safe_iterdir(p):
                 a = BTAdapter(name=d.name)
                 addr_f = d / "address"
                 if addr_f.exists():
