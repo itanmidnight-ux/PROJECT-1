@@ -3,11 +3,11 @@ __pycache__/
 .venv/
 logs/*.log
 database/*.db
-reports/
-*.json
-*.html
-*.md
-!README.md
-!config.yaml
+
+# Generated audit reports (source lives in reports/generator.py, tracked)
+reports/cyberscope_report_*.json
+reports/cyberscope_report_*.html
+reports/cyberscope_report_*.md
+
 .pytest_cache/
-cyberscope
+/cyberscope

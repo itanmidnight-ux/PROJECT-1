@@ -61,6 +61,10 @@ class CyberScopeEngine:
         self.ai       = RiskEngine()
         self.reporter = ReportGenerator(self.cfg.get("reports", {}).get("output_dir", "reports"))
 
+        # Create the session row up front — module_results has a FK on
+        # sessions(id) and modules may run before analyze() finalizes it.
+        self.db.save_session(self.session_id, mode="in_progress")
+
         log.info(f"CyberScope Engine ready — session={self.session_id}")
 
     # ── Discovery ─────────────────────────────────────────────────────────
