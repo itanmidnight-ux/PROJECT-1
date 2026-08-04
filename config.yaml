@@ -8,6 +8,11 @@ logging:
   level: INFO
   file: logs/cyberscope.log
 
+discovery:
+  # Every run writes the full capability/privilege probe here so what
+  # this device can and can't do is always on record.
+  capabilities_path: logs/capabilities.json
+
 database:
   path: database/cyberscope.db
 

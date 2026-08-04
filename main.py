@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import sys
 import os
+import time
 from pathlib import Path
 from typing import List, Optional
 
@@ -86,14 +87,19 @@ def _banner() -> None:
 
 def _show_capabilities(caps) -> None:
     from core.discovery import ModuleStatus
+    priv = caps.privileges
+    priv_detail = f"{priv.method.replace('_',' ')}" + ("" if priv.can_escalate else f" — {priv.reason}")
+    mm = caps.wifi.details.get("monitor_mode") if caps.wifi.details else False
+    mm_reason = caps.wifi.details.get("monitor_mode_reason", "") if caps.wifi.details else ""
     items = [
-        ("OS",        f"{caps.os_info.env_label} / {caps.os_info.arch}",  True),
-        ("Root",      "Yes" if caps.os_info.is_root else "No (limited)",   caps.os_info.is_root),
-        ("Network",   f"{len(caps.network)} interface(s)",                 bool(caps.network)),
-        ("WiFi",      caps.wifi.reason or caps.wifi.status.value,          bool(caps.wifi)),
-        ("Bluetooth", caps.bluetooth.reason or caps.bluetooth.status.value, bool(caps.bluetooth)),
-        ("SDR",       caps.sdr.reason or caps.sdr.status.value,            bool(caps.sdr)),
-        ("Telecom/SS7","Always available (simulator + PCAP)",              True),
+        ("OS",          f"{caps.os_info.env_label} / {caps.os_info.arch}",  True),
+        ("Privileges",  priv_detail,                                        priv.can_escalate),
+        ("Network",     f"{len(caps.network)} interface(s)",                bool(caps.network)),
+        ("WiFi",        caps.wifi.reason or caps.wifi.status.value,         bool(caps.wifi)),
+        ("WiFi Monitor Mode", "Supported" if mm else (mm_reason or "Unsupported"), bool(mm)),
+        ("Bluetooth",   caps.bluetooth.reason or caps.bluetooth.status.value, bool(caps.bluetooth)),
+        ("SDR",         caps.sdr.reason or caps.sdr.status.value,           bool(caps.sdr)),
+        ("Telecom/SS7", "Always available (simulator + PCAP)",              True),
     ]
     if _CON:
         t = Table(title="System Capabilities", style="cyan", show_header=True)
@@ -114,15 +120,17 @@ def _show_capabilities(caps) -> None:
 # ── Menu ──────────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("1", "auto",       "Auditoría automática completa",           None),
-    ("2", "network",    "Análisis de red local",                    "network"),
-    ("3", "wifi",       "Análisis WiFi",                            "wifi"),
-    ("4", "bluetooth",  "Análisis Bluetooth",                       "bluetooth"),
-    ("5", "device",     "Información del dispositivo",              "device"),
-    ("6", "telecom",    "Análisis Telecom / SS7",                   "telecom"),
-    ("7", "report",     "Generar reporte (JSON / HTML / Markdown)", None),
-    ("8", "history",    "Historial de auditorías",                  None),
-    ("9", "quit",       "Salir",                                    None),
+    ("1",  "auto",             "Auditoría automática completa",             None),
+    ("2",  "network",          "Análisis de red local",                     "network"),
+    ("3",  "wifi",             "Análisis WiFi",                             "wifi"),
+    ("4",  "wifi_monitor",     "Monitoreo WiFi en vivo (lista → detalle)",  "wifi"),
+    ("5",  "bluetooth",        "Análisis Bluetooth",                        "bluetooth"),
+    ("6",  "bluetooth_monitor","Monitoreo Bluetooth en vivo (lista → detalle)", "bluetooth"),
+    ("7",  "device",           "Información del dispositivo",               "device"),
+    ("8",  "telecom",          "Análisis Telecom / SS7",                    "telecom"),
+    ("9",  "report",           "Generar reporte (JSON / HTML / Markdown)",  None),
+    ("10", "history",          "Historial de auditorías",                   None),
+    ("11", "quit",             "Salir",                                     None),
 ]
 
 
@@ -187,6 +195,106 @@ def _show_result(result) -> None:
         for f in result.findings:
             print(f"  [{f.severity.value}] {f.type}: {f.description[:80]}")
         print()
+
+
+def _run_wifi_monitor(engine, caps) -> None:
+    from modules.wifi.monitor import WiFiMonitor
+    from ui.live_view import ListColumn, activation_progress, run_live_detail, run_live_list
+
+    mon = WiFiMonitor(engine.cfg)
+    if not mon.available:
+        _print("[red]No WiFi interface available for monitoring.[/red]")
+        return
+
+    activation_progress("WiFi Monitor", [
+        ("Verificando privilegios",          lambda: caps.privileges.to_dict()),
+        ("Verificando soporte de modo monitor", lambda: caps.wifi.details.get("monitor_mode")),
+        ("Iniciando motor de detección",     mon.poll),
+    ])
+
+    def subtitle() -> str:
+        mm = "monitor-mode capable" if caps.wifi.details.get("monitor_mode") else "active-scan mode"
+        return f"Interface: {mon.interface}  ·  {mm}  ·  {len(mon.registry)} tracked"
+
+    columns = [
+        ListColumn("SSID",     lambda n: n.ssid),
+        ListColumn("BSSID",    lambda n: n.bssid or "—"),
+        ListColumn("Signal",   lambda n: f"{n.signal} dBm"),
+        ListColumn("Channel",  lambda n: str(n.channel) if n.channel else "—"),
+        ListColumn("Security", lambda n: n.security),
+    ]
+
+    selected = run_live_list("WiFi Monitor — Live Networks", subtitle, mon.poll, columns)
+    if selected is None:
+        return
+
+    def detail(net) -> dict:
+        mon.poll()
+        t = mon.registry.get(net.key, net)
+        return {
+            "SSID":            t.ssid,
+            "BSSID":           t.bssid or "unknown",
+            "Channel":         t.channel or "unknown",
+            "Frequency (GHz)": t.frequency or "unknown",
+            "Signal (dBm)":    t.signal,
+            "Security":        t.security,
+            "First seen":      time.strftime("%H:%M:%S", time.localtime(t.first_seen)),
+            "Last seen":       time.strftime("%H:%M:%S", time.localtime(t.last_seen)),
+            "Times seen":      t.seen_count,
+        }
+
+    run_live_detail(
+        f"WiFi Network — {selected.ssid}", selected, detail,
+        probe_fn=lambda n: mon.probe(n.key),
+    )
+
+
+def _run_bluetooth_monitor(engine, caps) -> None:
+    from modules.bluetooth.monitor import BluetoothMonitor
+    from ui.live_view import ListColumn, activation_progress, run_live_detail, run_live_list
+
+    mon = BluetoothMonitor(engine.cfg)
+    if not mon.available:
+        _print("[red]No Bluetooth adapter available for monitoring.[/red]")
+        return
+
+    activation_progress("Bluetooth Monitor", [
+        ("Verificando privilegios",      lambda: caps.privileges.to_dict()),
+        ("Verificando adaptador",        lambda: mon.scanner.adapters[0].name),
+        ("Iniciando motor de detección", mon.poll),
+    ])
+
+    def subtitle() -> str:
+        adapter = mon.scanner.adapters[0].name if mon.scanner.adapters else "?"
+        return f"Adapter: {adapter}  ·  {len(mon.registry)} tracked"
+
+    columns = [
+        ListColumn("Name",    lambda d: d.name),
+        ListColumn("Address", lambda d: d.address),
+        ListColumn("Type",    lambda d: "BLE" if d.le else "Classic"),
+        ListColumn("Seen",    lambda d: str(d.seen_count)),
+    ]
+
+    selected = run_live_list("Bluetooth Monitor — Live Devices", subtitle, mon.poll, columns)
+    if selected is None:
+        return
+
+    def detail(dev) -> dict:
+        mon.poll()
+        t = mon.registry.get(dev.address, dev)
+        return {
+            "Name":       t.name,
+            "Address":    t.address,
+            "Type":       "BLE" if t.le else "Classic",
+            "First seen": time.strftime("%H:%M:%S", time.localtime(t.first_seen)),
+            "Last seen":  time.strftime("%H:%M:%S", time.localtime(t.last_seen)),
+            "Times seen": t.seen_count,
+        }
+
+    run_live_detail(
+        f"Bluetooth Device — {selected.name}", selected, detail,
+        probe_fn=lambda d: mon.probe(d.address),
+    )
 
 
 def _run_auto_audit(engine) -> None:
@@ -268,25 +376,37 @@ def interactive_mode() -> None:
         if choice == "1":
             _run_auto_audit(engine)
 
-        elif choice in ("2","3","4","5","6"):
-            mod_map = {"2":"network","3":"wifi","4":"bluetooth","5":"device","6":"telecom"}
+        elif choice in ("2","3","5","7","8"):
+            mod_map = {"2":"network","3":"wifi","5":"bluetooth","7":"device","8":"telecom"}
             mod = mod_map[choice]
             if mod not in available_mods:
                 _print(f"[red]{mod} not available on this system.[/red]")
             else:
                 _run_module_with_progress(engine, mod)
 
-        elif choice == "7":
+        elif choice == "4":
+            if "wifi" not in available_mods:
+                _print("[red]wifi not available on this system.[/red]")
+            else:
+                _run_wifi_monitor(engine, caps)
+
+        elif choice == "6":
+            if "bluetooth" not in available_mods:
+                _print("[red]bluetooth not available on this system.[/red]")
+            else:
+                _run_bluetooth_monitor(engine, caps)
+
+        elif choice == "9":
             if not engine.results:
                 _print("[yellow]No scan results yet. Run a module first.[/yellow]")
             else:
                 ai_report = engine.analyze()
                 _generate_reports(engine, ai_report)
 
-        elif choice == "8":
+        elif choice == "10":
             _show_history(engine)
 
-        elif choice in ("9","q","quit","exit"):
+        elif choice in ("11","q","quit","exit"):
             _print("[cyan]Goodbye.[/cyan]")
             sys.exit(0)
 
@@ -300,9 +420,18 @@ def cli_mode(args: argparse.Namespace) -> None:
     _banner()
     from core.engine import CyberScopeEngine
     engine = CyberScopeEngine(args.config)
-    engine.discover()
+    caps = engine.discover()
 
-    if args.auto:
+    if args.monitor:
+        available = caps.live_monitor_modules()
+        if args.monitor not in available:
+            _print(f"[red]{args.monitor} monitor not available on this system.[/red]")
+            return
+        if args.monitor == "wifi":
+            _run_wifi_monitor(engine, caps)
+        else:
+            _run_bluetooth_monitor(engine, caps)
+    elif args.auto:
         _run_auto_audit(engine)
     elif args.module:
         result = engine.run_module(args.module)
@@ -334,6 +463,9 @@ def main() -> None:
     parser.add_argument("--report",  "-r",
                         choices=["json","html","markdown","all"],
                         help="Generate report")
+    parser.add_argument("--monitor",
+                        choices=["wifi","bluetooth"],
+                        help="Open the live list→detail monitor for a module")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()
 
@@ -342,7 +474,7 @@ def main() -> None:
         logging.basicConfig(level=logging.DEBUG)
 
     # Interactive mode if no args given
-    if not (args.auto or args.module or args.report):
+    if not (args.auto or args.module or args.report or args.monitor):
         interactive_mode()
     else:
         cli_mode(args)

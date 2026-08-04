@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.config import load_config
-from core.discovery import SystemCapabilities, discover_all
+from core.discovery import SystemCapabilities, discover_all, save_capabilities_report
 from core.types import ModuleResult, ModuleStatus
 
 log = logging.getLogger("cyberscope.engine")
@@ -72,6 +72,12 @@ class CyberScopeEngine:
     def discover(self) -> SystemCapabilities:
         log.info("Running system discovery…")
         self.capabilities = discover_all()
+        cap_path = self.cfg.get("discovery", {}).get(
+            "capabilities_path", "logs/capabilities.json"
+        )
+        saved = save_capabilities_report(self.capabilities, cap_path)
+        if saved:
+            log.info(f"Capabilities report written to {saved}")
         return self.capabilities
 
     # ── Module dispatch ───────────────────────────────────────────────────

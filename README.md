@@ -32,12 +32,18 @@ cyberscope/
 │   │   ├── protocols.py         # MAP / TCAP / SCCP / M3UA / SCTP / BER
 │   │   ├── analyzer.py            # anomaly detection + findings
 │   │   └── simulator.py             # HLR / VLR / MSC / SMSC simulation
-│   ├── wifi/scanner.py         # nmcli / iw / iwlist based scanning + analysis
-│   ├── bluetooth/scanner.py    # hciconfig / bluetoothctl based scanning + analysis
+│   ├── wifi/
+│   │   ├── scanner.py          # nmcli / iw / iwlist based scanning + analysis
+│   │   └── monitor.py          # live scan registry + monitor-mode toggle
+│   ├── bluetooth/
+│   │   ├── scanner.py          # hciconfig / bluetoothctl based scanning + analysis
+│   │   └── monitor.py          # live scan registry
 │   ├── network/discovery.py    # interfaces, listening services, config
 │   └── device/system.py        # OS / CPU / kernel hardening checks
 ├── ai/
 │   └── engine.py             # RiskEngine: scoring, attack surface, recommendations
+├── ui/
+│   └── live_view.py           # list → detail live TUI (rich.Live based)
 ├── reports/
 │   └── generator.py          # JSON / HTML / Markdown report rendering
 ├── database/
@@ -69,6 +75,54 @@ Reports
 - **Detect → Analyze → Report** — no destructive or offensive actions.
 - **Explainability** — every finding carries a description, evidence, and
   a concrete recommendation.
+
+## Privilege detection (`core/permissions.py`)
+
+CyberScope never assumes root — it probes for it, the same way on plain
+Linux and Termux/Android:
+
+1. Already root (`euid == 0`)?
+2. Passwordless `sudo` available? (`sudo -n true` — this **never** prompts
+   for a password; it just fails immediately if one would be required)
+3. `su` already granted? (probed with stdin closed and a short timeout, so
+   it can't hang waiting on a password — on a rooted/Magisk device that's
+   already granted access it returns instantly)
+4. Termux's `tsu` wrapper present?
+
+None of this escalates anything — it only reports what's *already*
+possible, so modules that need elevated access (like WiFi monitor mode)
+know whether to offer it. The result is exposed as `caps.privileges` and
+shown in the capabilities table on startup.
+
+## Capabilities file
+
+Every run writes the complete discovery + privilege result to
+`logs/capabilities.json` (path configurable under `discovery:` in
+`config.yaml`) — OS info, every interface, WiFi/Bluetooth/SDR status and
+reasons, monitor-mode support, and the privilege probe. This is the
+device's capability record: what CyberScope found, and why anything
+unavailable is unavailable.
+
+## Live monitor mode (WiFi / Bluetooth)
+
+Beyond the one-shot `Análisis WiFi` / `Análisis Bluetooth` scans, the menu
+offers a **live monitor**: pick it, watch a progress bar while the
+detection engine starts, then get an auto-refreshing, numbered list of
+what's actually in range (SSID/BSSID/signal/security for WiFi;
+name/address/type for Bluetooth). Typing a number "locks" onto that one
+device — a live-updating detail panel takes over showing every known
+field, plus the result of an automatic **non-destructive security probe**
+(the same defensive WIFI_*/BT_* analysis the one-shot scanner runs,
+scoped to that single device — no connection attempt, no pairing, no
+exploitation). Press `q` at any point to back out.
+
+For WiFi, if root/privileged access is available *and* the adapter's
+driver advertises monitor-mode support (checked via `iw list`), CyberScope
+can reversibly switch the interface into monitor mode for the session
+(`modules/wifi/monitor.py::MonitorModeSession`) and always restores it to
+managed mode on exit. Without root or driver support, it falls back to
+active scanning automatically — the header always shows which mode is in
+effect.
 
 ## Quick start
 

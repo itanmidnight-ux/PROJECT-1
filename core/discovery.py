@@ -16,16 +16,19 @@ Detects:
 """
 from __future__ import annotations
 
+import json
 import os
 import re
 import shutil
 import subprocess
 import platform
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .types import CapabilityInfo, ModuleStatus
+from .permissions import PrivilegeStatus, detect_privileges
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -190,10 +193,44 @@ def detect_wifi() -> CapabilityInfo:
     status   = ModuleStatus.AVAILABLE if can_scan else ModuleStatus.LIMITED
     reason   = "" if can_scan else "Scanning requires root or NetworkManager (nmcli)"
 
+    monitor_supported, monitor_reason = detect_monitor_mode_support(wifi_ifaces[0])
+
     return CapabilityInfo(
         "WiFi", status, reason,
-        {"interfaces": wifi_ifaces, "can_scan": can_scan},
+        {
+            "interfaces":         wifi_ifaces,
+            "can_scan":           can_scan,
+            "monitor_mode":       monitor_supported,
+            "monitor_mode_reason": monitor_reason,
+        },
     )
+
+
+def detect_monitor_mode_support(iface: str) -> tuple[bool, str]:
+    """
+    Check whether the given WiFi interface's driver/phy advertises
+    monitor-mode support (via `iw list`). Root is still required to
+    actually switch the interface into monitor mode — that's checked
+    separately via core.permissions.
+    """
+    if not _tool_exists("iw"):
+        return False, "`iw` not installed — cannot query supported interface modes"
+
+    rc, out, _ = _run(["iw", "list"], timeout=8)
+    if rc != 0 or not out:
+        return False, "`iw list` unavailable (no permission or no wireless phy)"
+
+    # Look at each "Supported interface modes" block for "monitor"
+    for block in out.split("Wiphy"):
+        if "Supported interface modes" not in block:
+            continue
+        modes_section = block.split("Supported interface modes")[1]
+        # Stop at the next section header
+        modes_section = modes_section.split("\n\n")[0]
+        if re.search(r'\*\s*monitor', modes_section, re.IGNORECASE):
+            return True, ""
+
+    return False, "Wireless driver does not advertise monitor mode support"
 
 
 # ── Bluetooth ────────────────────────────────────────────────────────────────
@@ -313,6 +350,7 @@ class SystemCapabilities:
     sdr:         CapabilityInfo
     tools:       Dict[str, bool]
     telecom:     CapabilityInfo  # SS7 module always available
+    privileges:  PrivilegeStatus
 
     def available_modules(self) -> List[str]:
         mods = ["network", "device", "telecom"]
@@ -321,29 +359,62 @@ class SystemCapabilities:
         if self.sdr:        mods.append("sdr")
         return mods
 
+    def live_monitor_modules(self) -> List[str]:
+        """Modules that support the live list→detail monitor view."""
+        mods = []
+        if self.wifi:      mods.append("wifi")
+        if self.bluetooth: mods.append("bluetooth")
+        return mods
+
     def to_dict(self) -> dict:
         return {
-            "os":        vars(self.os_info),
-            "network":   [vars(i) for i in self.network],
-            "wifi":      self.wifi.to_dict(),
-            "bluetooth": self.bluetooth.to_dict(),
-            "sdr":       self.sdr.to_dict(),
-            "tools":     {k: v for k, v in self.tools.items() if v},
-            "telecom":   self.telecom.to_dict(),
+            "os":         vars(self.os_info),
+            "network":    [vars(i) for i in self.network],
+            "wifi":       self.wifi.to_dict(),
+            "bluetooth":  self.bluetooth.to_dict(),
+            "sdr":        self.sdr.to_dict(),
+            "tools":      {k: v for k, v in self.tools.items() if v},
+            "telecom":    self.telecom.to_dict(),
+            "privileges": self.privileges.to_dict(),
         }
 
 
 def discover_all() -> SystemCapabilities:
     """Run full system discovery. Safe to call without root."""
     return SystemCapabilities(
-        os_info   = detect_os(),
-        network   = detect_network_interfaces(),
-        wifi      = detect_wifi(),
-        bluetooth = detect_bluetooth(),
-        sdr       = detect_sdr(),
-        tools     = detect_tools(),
-        telecom   = CapabilityInfo(
+        os_info    = detect_os(),
+        network    = detect_network_interfaces(),
+        wifi       = detect_wifi(),
+        bluetooth  = detect_bluetooth(),
+        sdr        = detect_sdr(),
+        tools      = detect_tools(),
+        privileges = detect_privileges(),
+        telecom    = CapabilityInfo(
             "Telecom/SS7", ModuleStatus.AVAILABLE,
             "Protocol analysis + simulator always available",
         ),
     )
+
+
+def save_capabilities_report(
+    caps: SystemCapabilities,
+    path: str = "logs/capabilities.json",
+) -> str:
+    """
+    Persist the full capability/discovery result to disk so what the
+    device is (and isn't) capable of is always recorded — later runs,
+    other tooling, or a human reviewer can inspect it without having to
+    re-probe hardware. Never raises: a write failure is logged into the
+    returned status instead of crashing discovery.
+    """
+    p = Path(path)
+    payload = {
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        **caps.to_dict(),
+    }
+    try:
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(json.dumps(payload, indent=2, default=str))
+        return str(p)
+    except OSError:
+        return ""

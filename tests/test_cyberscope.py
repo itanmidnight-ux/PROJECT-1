@@ -555,3 +555,247 @@ class TestDatabase:
         db2 = self._make_db(tmp_path)
         sessions = db2.get_sessions()
         assert len(sessions) == 1
+
+
+# ================================================================
+# Privileges (root / sudo / su detection)
+# ================================================================
+
+class TestPrivileges:
+    def test_already_root(self, monkeypatch):
+        from core import permissions
+        monkeypatch.setattr(permissions.os, "geteuid", lambda: 0)
+        status = permissions.detect_privileges()
+        assert status.is_root is True
+        assert status.method == "already_root"
+        assert status.can_escalate is True
+
+    def test_no_escalation_available(self, monkeypatch):
+        from core import permissions
+        monkeypatch.setattr(permissions.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(permissions, "_tool_exists", lambda name: False)
+        status = permissions.detect_privileges()
+        assert status.is_root is False
+        assert status.method == "none"
+        assert status.can_escalate is False
+
+    def test_sudo_nopasswd_detected(self, monkeypatch):
+        from core import permissions
+        monkeypatch.setattr(permissions.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(permissions, "_tool_exists", lambda name: name == "sudo")
+        monkeypatch.setattr(permissions, "_probe",
+                             lambda cmd, timeout: 0 if cmd[0] == "sudo" else None)
+        status = permissions.detect_privileges()
+        assert status.sudo_nopasswd is True
+        assert status.method == "sudo_nopasswd"
+        assert status.can_escalate is True
+
+    def test_su_granted_detected(self, monkeypatch):
+        from core import permissions
+        monkeypatch.setattr(permissions.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(permissions, "_tool_exists", lambda name: name == "su")
+        monkeypatch.setattr(permissions, "_probe",
+                             lambda cmd, timeout: 0 if cmd[0] == "su" else None)
+        status = permissions.detect_privileges()
+        assert status.su_granted is True
+        assert status.method == "su_granted"
+        assert status.can_escalate is True
+
+    def test_su_present_but_denied(self, monkeypatch):
+        from core import permissions
+        monkeypatch.setattr(permissions.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(permissions, "_tool_exists", lambda name: name == "su")
+        monkeypatch.setattr(permissions, "_probe", lambda cmd, timeout: 1)
+        status = permissions.detect_privileges()
+        assert status.su_granted is False
+        assert status.can_escalate is False
+
+    def test_probe_never_hangs_on_timeout(self, monkeypatch):
+        from core import permissions
+        monkeypatch.setattr(permissions.os, "geteuid", lambda: 1000)
+        monkeypatch.setattr(permissions, "_tool_exists", lambda name: True)
+        monkeypatch.setattr(permissions, "_probe", lambda cmd, timeout: None)
+        status = permissions.detect_privileges()
+        assert status.can_escalate is False
+        assert status.method == "none"
+
+    def test_to_dict(self):
+        from core.permissions import PrivilegeStatus
+        s = PrivilegeStatus(
+            is_root=True, method="already_root", sudo_available=True,
+            sudo_nopasswd=True, su_available=True, su_granted=True,
+            tsu_available=False, is_termux=False, reason="ok",
+        )
+        d = s.to_dict()
+        assert d["can_escalate"] is True
+        assert d["method"] == "already_root"
+
+
+# ================================================================
+# WiFi monitor-mode capability detection
+# ================================================================
+
+class TestMonitorModeDetection:
+    def test_supported(self, monkeypatch):
+        from core import discovery
+        sample = (
+            "Wiphy phy0\n"
+            "\tSupported interface modes:\n"
+            "\t\t * IBSS\n"
+            "\t\t * managed\n"
+            "\t\t * AP\n"
+            "\t\t * monitor\n"
+            "\n"
+            "\tBand 1:\n"
+        )
+        monkeypatch.setattr(discovery, "_tool_exists", lambda name: True)
+        monkeypatch.setattr(discovery, "_run", lambda cmd, timeout=5: (0, sample, ""))
+        ok, reason = discovery.detect_monitor_mode_support("wlan0")
+        assert ok is True
+        assert reason == ""
+
+    def test_unsupported(self, monkeypatch):
+        from core import discovery
+        sample = (
+            "Wiphy phy0\n"
+            "\tSupported interface modes:\n"
+            "\t\t * IBSS\n"
+            "\t\t * managed\n"
+            "\t\t * AP\n"
+            "\n"
+        )
+        monkeypatch.setattr(discovery, "_tool_exists", lambda name: True)
+        monkeypatch.setattr(discovery, "_run", lambda cmd, timeout=5: (0, sample, ""))
+        ok, reason = discovery.detect_monitor_mode_support("wlan0")
+        assert ok is False
+        assert reason
+
+    def test_no_iw_tool(self, monkeypatch):
+        from core import discovery
+        monkeypatch.setattr(discovery, "_tool_exists", lambda name: False)
+        ok, reason = discovery.detect_monitor_mode_support("wlan0")
+        assert ok is False
+        assert reason
+
+
+# ================================================================
+# WiFi live monitor
+# ================================================================
+
+class TestWiFiMonitorMerge:
+    def test_new_network_added(self):
+        from modules.wifi.monitor import merge_scan
+        from modules.wifi.scanner import WiFiNetwork
+        registry = {}
+        merge_scan(registry, [WiFiNetwork(ssid="Net1", bssid="AA:BB:CC:DD:EE:FF", signal=-50)], now=100.0)
+        t = registry["AA:BB:CC:DD:EE:FF"]
+        assert t.first_seen == 100.0 == t.last_seen
+        assert t.seen_count == 1
+
+    def test_existing_network_updated(self):
+        from modules.wifi.monitor import merge_scan
+        from modules.wifi.scanner import WiFiNetwork
+        registry = {}
+        merge_scan(registry, [WiFiNetwork(ssid="Net1", bssid="AA:BB", signal=-70)], now=100.0)
+        merge_scan(registry, [WiFiNetwork(ssid="Net1", bssid="AA:BB", signal=-40)], now=105.0)
+        t = registry["AA:BB"]
+        assert t.signal == -40
+        assert t.first_seen == 100.0
+        assert t.last_seen == 105.0
+        assert t.seen_count == 2
+
+    def test_hidden_bssid_key_fallback(self):
+        from modules.wifi.monitor import merge_scan
+        from modules.wifi.scanner import WiFiNetwork
+        registry = {}
+        merge_scan(registry, [WiFiNetwork(ssid="NoAddr", bssid="", signal=-60)], now=1.0)
+        assert "ssid:NoAddr" in registry
+
+
+class TestWiFiMonitorProbe:
+    def test_probe_open_network(self):
+        from modules.wifi.monitor import WiFiMonitor, TrackedNetwork
+        mon = WiFiMonitor({})
+        mon.registry["BSSID1"] = TrackedNetwork(
+            key="BSSID1", ssid="FreeWifi", bssid="BSSID1", channel=6,
+            frequency=2.437, signal=-50, security="OPEN",
+            first_seen=1.0, last_seen=1.0,
+        )
+        findings = mon.probe("BSSID1")
+        assert any(f.type == "WIFI_OPEN_NETWORK" for f in findings)
+
+    def test_probe_unknown_key_empty(self):
+        from modules.wifi.monitor import WiFiMonitor
+        mon = WiFiMonitor({})
+        assert mon.probe("nope") == []
+
+
+class TestMonitorModeSession:
+    def test_no_privileges_falls_back(self):
+        from modules.wifi.monitor import MonitorModeSession
+        from core.permissions import PrivilegeStatus
+        priv = PrivilegeStatus(
+            is_root=False, method="none", sudo_available=False,
+            sudo_nopasswd=False, su_available=False, su_granted=False,
+            tsu_available=False, is_termux=False, reason="no root",
+        )
+        with MonitorModeSession("wlan0", priv) as sess:
+            assert sess.active is False
+            assert "not available" in sess.reason.lower()
+
+    def test_unsupported_driver_falls_back(self, monkeypatch):
+        from modules.wifi import monitor as monitor_mod
+        from core.permissions import PrivilegeStatus
+        priv = PrivilegeStatus(
+            is_root=True, method="already_root", sudo_available=True,
+            sudo_nopasswd=True, su_available=True, su_granted=True,
+            tsu_available=False, is_termux=False, reason="root",
+        )
+        monkeypatch.setattr(monitor_mod, "detect_monitor_mode_support",
+                             lambda iface: (False, "no monitor support"))
+        with monitor_mod.MonitorModeSession("wlan0", priv) as sess:
+            assert sess.active is False
+            assert sess.reason == "no monitor support"
+
+
+# ================================================================
+# Bluetooth live monitor
+# ================================================================
+
+class TestBluetoothMonitorMerge:
+    def test_new_device_added(self):
+        from modules.bluetooth.monitor import merge_scan
+        from modules.bluetooth.scanner import BTDevice
+        registry = {}
+        merge_scan(registry, [BTDevice(address="11:22:33:44:55:66", name="Phone")], now=1.0)
+        assert registry["11:22:33:44:55:66"].name == "Phone"
+
+    def test_name_upgrade_on_rescan(self):
+        from modules.bluetooth.monitor import merge_scan
+        from modules.bluetooth.scanner import BTDevice
+        registry = {}
+        merge_scan(registry, [BTDevice(address="AA", name="Unknown")], now=1.0)
+        merge_scan(registry, [BTDevice(address="AA", name="RealName")], now=2.0)
+        assert registry["AA"].name == "RealName"
+        assert registry["AA"].seen_count == 2
+
+
+class TestBluetoothMonitorProbe:
+    def test_probe_unknown_key_empty(self):
+        from modules.bluetooth.monitor import BluetoothMonitor
+        mon = BluetoothMonitor({})
+        assert mon.probe("nope") == []
+
+
+# ================================================================
+# Live TUI helpers (non-interactive-safe paths only)
+# ================================================================
+
+class TestLiveViewHelpers:
+    def test_read_line_nonblocking_non_tty_returns_none(self):
+        from ui.live_view import _read_line_nonblocking
+        assert _read_line_nonblocking(0.01) is None
+
+    def test_header_panel_smoke(self):
+        from ui.live_view import header_panel
+        assert header_panel("Title", "Subtitle") is not None

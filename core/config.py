@@ -12,6 +12,7 @@ _ROOT = Path(__file__).parent.parent
 _DEFAULTS: Dict[str, Any] = {
     "platform": {"name": "CyberScope AI Security Platform", "version": "1.0.0"},
     "logging":  {"level": "INFO", "file": "logs/cyberscope.log"},
+    "discovery":{"capabilities_path": "logs/capabilities.json"},
     "database": {"path": "database/cyberscope.db"},
     "reports":  {"output_dir": "reports", "formats": ["json", "html", "markdown"]},
     "wifi":     {"scan_timeout": 10, "passive_only": True},

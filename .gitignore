@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .venv/
 logs/*.log
+logs/*.json
 database/*.db
 
 # Generated audit reports (source lives in reports/generator.py, tracked)
