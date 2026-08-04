@@ -109,13 +109,14 @@ unavailable is unavailable.
 
 ## Live monitor mode (every module with something to list)
 
-Beyond the one-shot `Análisis <módulo>` scans, the menu offers a **live
-monitor** for each module that has a natural list of "devices" to watch —
-currently **Network**, **WiFi**, **Bluetooth**, and **Telecom/SS7** — each
-gated by the same capability check as its static counterpart, so it only
-appears when the device can actually do it. Pick one, watch a progress
-bar while the detection engine starts, then get an auto-refreshing,
-numbered list of what's actually there:
+The menu has one entry per module that has a natural list of "devices" to
+watch — **Network**, **WiFi**, **Bluetooth**, and **Telecom/SS7** — each
+gated by capability so it only appears when the device can actually do
+it. Picking one does both halves in sequence, not two separate menu
+items: first the static scan (so its findings still feed the AI risk
+engine, `Generar reporte`, and audit history), then a progress bar while
+the live detection engine starts, then an auto-refreshing, numbered list
+of what's actually there:
 
 | Module | List shows | Detail view adds |
 |---|---|---|

@@ -120,19 +120,15 @@ def _show_capabilities(caps) -> None:
 # ── Menu ──────────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("1",  "auto",              "Auditoría automática completa",                  None),
-    ("2",  "network",           "Análisis de red local",                          "network"),
-    ("3",  "network_monitor",   "Monitoreo de red en vivo (lista → detalle)",     "network"),
-    ("4",  "wifi",              "Análisis WiFi",                                  "wifi"),
-    ("5",  "wifi_monitor",      "Monitoreo WiFi en vivo (lista → detalle)",       "wifi"),
-    ("6",  "bluetooth",         "Análisis Bluetooth",                             "bluetooth"),
-    ("7",  "bluetooth_monitor", "Monitoreo Bluetooth en vivo (lista → detalle)",  "bluetooth"),
-    ("8",  "device",            "Información del dispositivo",                    "device"),
-    ("9",  "telecom",           "Análisis Telecom / SS7",                         "telecom"),
-    ("10", "telecom_monitor",   "Monitoreo Telecom/SS7 en vivo (lista → detalle)","telecom"),
-    ("11", "report",            "Generar reporte (JSON / HTML / Markdown)",       None),
-    ("12", "history",           "Historial de auditorías",                        None),
-    ("13", "quit",              "Salir",                                          None),
+    ("1", "auto",       "Auditoría automática completa",                       None),
+    ("2", "network",    "Red local (análisis + monitoreo en vivo)",            "network"),
+    ("3", "wifi",       "WiFi (análisis + monitoreo en vivo)",                 "wifi"),
+    ("4", "bluetooth",  "Bluetooth (análisis + monitoreo en vivo)",            "bluetooth"),
+    ("5", "device",     "Información del dispositivo",                        "device"),
+    ("6", "telecom",    "Telecom / SS7 (análisis + monitoreo en vivo)",       "telecom"),
+    ("7", "report",     "Generar reporte (JSON / HTML / Markdown)",           None),
+    ("8", "history",    "Historial de auditorías",                           None),
+    ("9", "quit",       "Salir",                                             None),
 ]
 
 
@@ -422,6 +418,28 @@ def _run_bluetooth_monitor(engine, caps) -> None:
     )
 
 
+def _run_network_full(engine, caps) -> None:
+    """Static scan first (feeds the report/history pipeline), then the
+    live list→detail monitor — one menu action, nothing lost."""
+    _run_module_with_progress(engine, "network")
+    _run_network_monitor(engine, caps)
+
+
+def _run_wifi_full(engine, caps) -> None:
+    _run_module_with_progress(engine, "wifi")
+    _run_wifi_monitor(engine, caps)
+
+
+def _run_bluetooth_full(engine, caps) -> None:
+    _run_module_with_progress(engine, "bluetooth")
+    _run_bluetooth_monitor(engine, caps)
+
+
+def _run_telecom_full(engine, caps) -> None:
+    _run_module_with_progress(engine, "telecom")
+    _run_telecom_monitor(engine, caps)
+
+
 def _run_auto_audit(engine) -> None:
     _print("[cyan]Starting full auto-audit…[/cyan]")
     engine.run_auto_audit()
@@ -498,42 +516,40 @@ def interactive_mode() -> None:
         _show_menu(caps)
         choice = _input("Seleccione").strip()
 
-        _monitor_map = {
-            "3":  ("network",   _run_network_monitor),
-            "5":  ("wifi",      _run_wifi_monitor),
-            "7":  ("bluetooth", _run_bluetooth_monitor),
-            "10": ("telecom",   _run_telecom_monitor),
+        _unified_map = {
+            "2": ("network",   _run_network_full),
+            "3": ("wifi",      _run_wifi_full),
+            "4": ("bluetooth", _run_bluetooth_full),
+            "6": ("telecom",   _run_telecom_full),
         }
 
         if choice == "1":
             _run_auto_audit(engine)
 
-        elif choice in ("2","4","6","8","9"):
-            mod_map = {"2":"network","4":"wifi","6":"bluetooth","8":"device","9":"telecom"}
-            mod = mod_map[choice]
-            if mod not in available_mods:
-                _print(f"[red]{mod} not available on this system.[/red]")
+        elif choice == "5":
+            if "device" not in available_mods:
+                _print("[red]device not available on this system.[/red]")
             else:
-                _run_module_with_progress(engine, mod)
+                _run_module_with_progress(engine, "device")
 
-        elif choice in _monitor_map:
-            mod, handler = _monitor_map[choice]
+        elif choice in _unified_map:
+            mod, handler = _unified_map[choice]
             if mod not in available_mods:
                 _print(f"[red]{mod} not available on this system.[/red]")
             else:
                 handler(engine, caps)
 
-        elif choice == "11":
+        elif choice == "7":
             if not engine.results:
                 _print("[yellow]No scan results yet. Run a module first.[/yellow]")
             else:
                 ai_report = engine.analyze()
                 _generate_reports(engine, ai_report)
 
-        elif choice == "12":
+        elif choice == "8":
             _show_history(engine)
 
-        elif choice in ("13","q","quit","exit"):
+        elif choice in ("9","q","quit","exit"):
             _print("[cyan]Goodbye.[/cyan]")
             sys.exit(0)
 
