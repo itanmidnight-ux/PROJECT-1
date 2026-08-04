@@ -361,7 +361,7 @@ class SystemCapabilities:
 
     def live_monitor_modules(self) -> List[str]:
         """Modules that support the live list→detail monitor view."""
-        mods = []
+        mods = ["network", "telecom"]  # always available, same as available_modules()
         if self.wifi:      mods.append("wifi")
         if self.bluetooth: mods.append("bluetooth")
         return mods

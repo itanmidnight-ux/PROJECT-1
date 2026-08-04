@@ -120,17 +120,19 @@ def _show_capabilities(caps) -> None:
 # ── Menu ──────────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("1",  "auto",             "Auditoría automática completa",             None),
-    ("2",  "network",          "Análisis de red local",                     "network"),
-    ("3",  "wifi",             "Análisis WiFi",                             "wifi"),
-    ("4",  "wifi_monitor",     "Monitoreo WiFi en vivo (lista → detalle)",  "wifi"),
-    ("5",  "bluetooth",        "Análisis Bluetooth",                        "bluetooth"),
-    ("6",  "bluetooth_monitor","Monitoreo Bluetooth en vivo (lista → detalle)", "bluetooth"),
-    ("7",  "device",           "Información del dispositivo",               "device"),
-    ("8",  "telecom",          "Análisis Telecom / SS7",                    "telecom"),
-    ("9",  "report",           "Generar reporte (JSON / HTML / Markdown)",  None),
-    ("10", "history",          "Historial de auditorías",                   None),
-    ("11", "quit",             "Salir",                                     None),
+    ("1",  "auto",              "Auditoría automática completa",                  None),
+    ("2",  "network",           "Análisis de red local",                          "network"),
+    ("3",  "network_monitor",   "Monitoreo de red en vivo (lista → detalle)",     "network"),
+    ("4",  "wifi",              "Análisis WiFi",                                  "wifi"),
+    ("5",  "wifi_monitor",      "Monitoreo WiFi en vivo (lista → detalle)",       "wifi"),
+    ("6",  "bluetooth",         "Análisis Bluetooth",                             "bluetooth"),
+    ("7",  "bluetooth_monitor", "Monitoreo Bluetooth en vivo (lista → detalle)",  "bluetooth"),
+    ("8",  "device",            "Información del dispositivo",                    "device"),
+    ("9",  "telecom",           "Análisis Telecom / SS7",                         "telecom"),
+    ("10", "telecom_monitor",   "Monitoreo Telecom/SS7 en vivo (lista → detalle)","telecom"),
+    ("11", "report",            "Generar reporte (JSON / HTML / Markdown)",       None),
+    ("12", "history",           "Historial de auditorías",                        None),
+    ("13", "quit",              "Salir",                                          None),
 ]
 
 
@@ -195,6 +197,98 @@ def _show_result(result) -> None:
         for f in result.findings:
             print(f"  [{f.severity.value}] {f.type}: {f.description[:80]}")
         print()
+
+
+def _run_network_monitor(engine, caps) -> None:
+    from modules.network.monitor import NetworkMonitor
+    from ui.live_view import ListColumn, activation_progress, run_live_detail, run_live_list
+
+    mon = NetworkMonitor(engine.cfg)
+
+    activation_progress("Network Monitor", [
+        ("Verificando privilegios",              lambda: caps.privileges.to_dict()),
+        ("Leyendo tabla de vecinos (ARP/NDP)",    mon.poll),
+    ])
+
+    def subtitle() -> str:
+        return f"{len(mon.registry)} host(s) conocidos en la red local"
+
+    columns = [
+        ListColumn("IP",     lambda h: h.ip),
+        ListColumn("MAC",    lambda h: h.mac or "—"),
+        ListColumn("Estado", lambda h: h.state or "—"),
+        ListColumn("Visto",  lambda h: str(h.seen_count)),
+    ]
+
+    selected = run_live_list("Network Monitor — Hosts en vivo", subtitle, mon.poll, columns)
+    if selected is None:
+        return
+
+    def detail(host) -> dict:
+        mon.poll()
+        t = mon.registry.get(host.ip, host)
+        return {
+            "IP":            t.ip,
+            "MAC":           t.mac or "unknown",
+            "Estado ARP":    t.state or "unknown",
+            "Primero visto": time.strftime("%H:%M:%S", time.localtime(t.first_seen)),
+            "Última vez":    time.strftime("%H:%M:%S", time.localtime(t.last_seen)),
+            "Veces visto":   t.seen_count,
+        }
+
+    run_live_detail(
+        f"Host — {selected.ip}", selected, detail,
+        probe_fn=lambda h: mon.probe(h.ip),
+    )
+
+
+def _run_telecom_monitor(engine, caps) -> None:
+    from modules.telecom.monitor import TelecomMonitor
+    from ui.live_view import ListColumn, activation_progress, run_live_detail, run_live_list
+
+    mon = TelecomMonitor(engine.cfg)
+
+    try:
+        activation_progress("Telecom / SS7 Monitor", [
+            ("Cargando base de suscriptores sintética",       lambda: len(mon.db._db)),
+            ("Iniciando generador de tráfico de laboratorio", mon.start_traffic),
+            ("Recolectando actividad inicial",                mon.poll),
+        ])
+
+        def subtitle() -> str:
+            return (f"Modo laboratorio (simulador) · "
+                    f"{len(mon.registry)} suscriptor(es) con actividad")
+
+        columns = [
+            ListColumn("MSISDN",     lambda s: s.msisdn),
+            ListColumn("IMSI",       lambda s: s.imsi),
+            ListColumn("Eventos",    lambda s: str(s.events)),
+            ListColumn("Sospechoso", lambda s: "⚠" if s.suspicious_events else "—"),
+        ]
+
+        selected = run_live_list("Telecom/SS7 Monitor — Actividad en vivo", subtitle, mon.poll, columns)
+        if selected is None:
+            return
+
+        def detail(sub) -> dict:
+            mon.poll()
+            t = mon.registry.get(sub.msisdn, sub)
+            return {
+                "MSISDN":              t.msisdn,
+                "IMSI":                t.imsi,
+                "Roaming":             "Sí" if t.roaming else "No",
+                "LAC":                 t.lac,
+                "Eventos totales":     t.events,
+                "Eventos sospechosos": t.suspicious_events,
+                "Última operación":    t.last_op or "—",
+            }
+
+        run_live_detail(
+            f"Suscriptor — {selected.msisdn}", selected, detail,
+            probe_fn=lambda s: mon.probe(s.msisdn),
+        )
+    finally:
+        mon.stop_traffic()
 
 
 def _run_wifi_monitor(engine, caps) -> None:
@@ -373,40 +467,42 @@ def interactive_mode() -> None:
         _show_menu(caps)
         choice = _input("Seleccione").strip()
 
+        _monitor_map = {
+            "3":  ("network",   _run_network_monitor),
+            "5":  ("wifi",      _run_wifi_monitor),
+            "7":  ("bluetooth", _run_bluetooth_monitor),
+            "10": ("telecom",   _run_telecom_monitor),
+        }
+
         if choice == "1":
             _run_auto_audit(engine)
 
-        elif choice in ("2","3","5","7","8"):
-            mod_map = {"2":"network","3":"wifi","5":"bluetooth","7":"device","8":"telecom"}
+        elif choice in ("2","4","6","8","9"):
+            mod_map = {"2":"network","4":"wifi","6":"bluetooth","8":"device","9":"telecom"}
             mod = mod_map[choice]
             if mod not in available_mods:
                 _print(f"[red]{mod} not available on this system.[/red]")
             else:
                 _run_module_with_progress(engine, mod)
 
-        elif choice == "4":
-            if "wifi" not in available_mods:
-                _print("[red]wifi not available on this system.[/red]")
+        elif choice in _monitor_map:
+            mod, handler = _monitor_map[choice]
+            if mod not in available_mods:
+                _print(f"[red]{mod} not available on this system.[/red]")
             else:
-                _run_wifi_monitor(engine, caps)
+                handler(engine, caps)
 
-        elif choice == "6":
-            if "bluetooth" not in available_mods:
-                _print("[red]bluetooth not available on this system.[/red]")
-            else:
-                _run_bluetooth_monitor(engine, caps)
-
-        elif choice == "9":
+        elif choice == "11":
             if not engine.results:
                 _print("[yellow]No scan results yet. Run a module first.[/yellow]")
             else:
                 ai_report = engine.analyze()
                 _generate_reports(engine, ai_report)
 
-        elif choice == "10":
+        elif choice == "12":
             _show_history(engine)
 
-        elif choice in ("11","q","quit","exit"):
+        elif choice in ("13","q","quit","exit"):
             _print("[cyan]Goodbye.[/cyan]")
             sys.exit(0)
 
@@ -427,10 +523,13 @@ def cli_mode(args: argparse.Namespace) -> None:
         if args.monitor not in available:
             _print(f"[red]{args.monitor} monitor not available on this system.[/red]")
             return
-        if args.monitor == "wifi":
-            _run_wifi_monitor(engine, caps)
-        else:
-            _run_bluetooth_monitor(engine, caps)
+        handlers = {
+            "network":   _run_network_monitor,
+            "wifi":      _run_wifi_monitor,
+            "bluetooth": _run_bluetooth_monitor,
+            "telecom":   _run_telecom_monitor,
+        }
+        handlers[args.monitor](engine, caps)
     elif args.auto:
         _run_auto_audit(engine)
     elif args.module:
@@ -464,7 +563,7 @@ def main() -> None:
                         choices=["json","html","markdown","all"],
                         help="Generate report")
     parser.add_argument("--monitor",
-                        choices=["wifi","bluetooth"],
+                        choices=["network","wifi","bluetooth","telecom"],
                         help="Open the live list→detail monitor for a module")
     parser.add_argument("--verbose", "-v", action="store_true")
     args = parser.parse_args()

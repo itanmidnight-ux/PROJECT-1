@@ -27,18 +27,21 @@ cyberscope/
 │   ├── config.py               # config.yaml loading with defaults
 │   └── types.py                 # Finding, ModuleResult, Severity, CapabilityInfo
 ├── modules/
-│   ├── telecom/               # SS7 / SIGTRAN — the original framework
+│   ├── telecom/                # SS7 / SIGTRAN — the original framework
 │   │   ├── ss7_engine.py
 │   │   ├── protocols.py         # MAP / TCAP / SCCP / M3UA / SCTP / BER
 │   │   ├── analyzer.py            # anomaly detection + findings
-│   │   └── simulator.py             # HLR / VLR / MSC / SMSC simulation
+│   │   ├── simulator.py             # HLR / VLR / MSC / SMSC simulation
+│   │   └── monitor.py               # live subscriber-activity registry
 │   ├── wifi/
 │   │   ├── scanner.py          # nmcli / iw / iwlist based scanning + analysis
 │   │   └── monitor.py          # live scan registry + monitor-mode toggle
 │   ├── bluetooth/
 │   │   ├── scanner.py          # hciconfig / bluetoothctl based scanning + analysis
 │   │   └── monitor.py          # live scan registry
-│   ├── network/discovery.py    # interfaces, listening services, config
+│   ├── network/
+│   │   ├── discovery.py        # interfaces, listening services, config
+│   │   └── monitor.py          # live ARP/NDP host registry + port probe
 │   └── device/system.py        # OS / CPU / kernel hardening checks
 ├── ai/
 │   └── engine.py             # RiskEngine: scoring, attack surface, recommendations
@@ -103,18 +106,29 @@ reasons, monitor-mode support, and the privilege probe. This is the
 device's capability record: what CyberScope found, and why anything
 unavailable is unavailable.
 
-## Live monitor mode (WiFi / Bluetooth)
+## Live monitor mode (every module with something to list)
 
-Beyond the one-shot `Análisis WiFi` / `Análisis Bluetooth` scans, the menu
-offers a **live monitor**: pick it, watch a progress bar while the
-detection engine starts, then get an auto-refreshing, numbered list of
-what's actually in range (SSID/BSSID/signal/security for WiFi;
-name/address/type for Bluetooth). Typing a number "locks" onto that one
-device — a live-updating detail panel takes over showing every known
-field, plus the result of an automatic **non-destructive security probe**
-(the same defensive WIFI_*/BT_* analysis the one-shot scanner runs,
-scoped to that single device — no connection attempt, no pairing, no
-exploitation). Press `q` at any point to back out.
+Beyond the one-shot `Análisis <módulo>` scans, the menu offers a **live
+monitor** for each module that has a natural list of "devices" to watch —
+currently **Network**, **WiFi**, **Bluetooth**, and **Telecom/SS7** — each
+gated by the same capability check as its static counterpart, so it only
+appears when the device can actually do it. Pick one, watch a progress
+bar while the detection engine starts, then get an auto-refreshing,
+numbered list of what's actually there:
+
+| Module | List shows | Detail view adds |
+|---|---|---|
+| **Network** | IP, MAC, ARP state, times seen (from the kernel neighbor table — read-only, no packets sent) | ICMP reachability + a short, non-destructive TCP connect check of common ports |
+| **WiFi** | SSID, BSSID, signal, channel, security | first/last seen, times seen |
+| **Bluetooth** | name, address, classic/BLE, times seen | first/last seen, times seen |
+| **Telecom/SS7** | MSISDN, IMSI, event count, suspicious flag (from the laboratory HLR/VLR/SMSC simulator's live subscriber activity — see below) | roaming status, LAC, last operation |
+
+Typing a number "locks" onto that one item — a live-updating detail panel
+takes over showing every known field, plus the result of an automatic
+**non-destructive security probe** scoped to that single item (the same
+defensive analysis the one-shot scanner already runs — no connection
+attempt, no pairing, no exploitation, no payloads). Press `q` at any point
+to back out.
 
 For WiFi, if root/privileged access is available *and* the adapter's
 driver advertises monitor-mode support (checked via `iw list`), CyberScope
@@ -123,6 +137,17 @@ can reversibly switch the interface into monitor mode for the session
 managed mode on exit. Without root or driver support, it falls back to
 active scanning automatically — the header always shows which mode is in
 effect.
+
+The Telecom/SS7 live monitor is always available, the same way the
+one-shot telecom scan is: the module's own laboratory simulator (no real
+SIGTRAN/operator connectivity) runs a background generator of realistic
+subscriber activity — SendRoutingInfo, UpdateLocation, occasional
+InsertSubscriberData attempts — against the same HLR/VLR/SMSC handlers
+real MAP traffic would hit. The HLR rejects and flags ISD attempts exactly
+like a real network element would, and that's what the live monitor's
+security probe surfaces per subscriber. To analyze *real* captured SS7
+traffic, feed a PCAP through the existing `SS7Analyzer`
+(`modules/telecom/analyzer.py`) directly.
 
 ## Quick start
 

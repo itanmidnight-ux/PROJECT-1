@@ -799,3 +799,160 @@ class TestLiveViewHelpers:
     def test_header_panel_smoke(self):
         from ui.live_view import header_panel
         assert header_panel("Title", "Subtitle") is not None
+
+
+# ================================================================
+# Network live monitor
+# ================================================================
+
+class TestNetworkMonitorParsing:
+    def test_parse_ip_neigh_basic(self):
+        from modules.network.monitor import parse_ip_neigh
+        sample = (
+            "192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\n"
+            "192.168.1.20 dev eth0 lladdr 11:22:33:44:55:66 STALE\n"
+            "192.168.1.99 dev eth0 FAILED\n"
+        )
+        hosts = parse_ip_neigh(sample)
+        assert len(hosts) == 3
+        assert hosts[0]["ip"] == "192.168.1.1"
+        assert hosts[0]["mac"] == "aa:bb:cc:dd:ee:ff"
+        assert hosts[0]["state"] == "REACHABLE"
+        assert hosts[2]["mac"] == ""
+        assert hosts[2]["state"] == "FAILED"
+
+    def test_parse_empty(self):
+        from modules.network.monitor import parse_ip_neigh
+        assert parse_ip_neigh("") == []
+
+
+class TestNetworkMonitorMerge:
+    def test_new_host_added(self):
+        from modules.network.monitor import merge_scan
+        registry = {}
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "AA:BB", "state": "REACHABLE"}], now=1.0)
+        t = registry["10.0.0.5"]
+        assert t.mac == "AA:BB"
+        assert t.first_seen == 1.0 == t.last_seen
+        assert t.seen_count == 1
+
+    def test_existing_host_updated(self):
+        from modules.network.monitor import merge_scan
+        registry = {}
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "", "state": "STALE"}], now=1.0)
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "AA:BB", "state": "REACHABLE"}], now=2.0)
+        t = registry["10.0.0.5"]
+        assert t.mac == "AA:BB"
+        assert t.state == "REACHABLE"
+        assert t.first_seen == 1.0
+        assert t.last_seen == 2.0
+        assert t.seen_count == 2
+
+    def test_missing_ip_skipped(self):
+        from modules.network.monitor import merge_scan
+        registry = {}
+        merge_scan(registry, [{"ip": "", "mac": "AA", "state": "X"}], now=1.0)
+        assert registry == {}
+
+
+class TestNetworkMonitorProbe:
+    def test_probe_unknown_host_empty(self):
+        from modules.network.monitor import NetworkMonitor
+        mon = NetworkMonitor({})
+        assert mon.probe("10.0.0.99") == []
+
+    def test_probe_known_host_runs(self):
+        from modules.network.monitor import NetworkMonitor, TrackedHost
+        mon = NetworkMonitor({})
+        mon.registry["127.0.0.1"] = TrackedHost(
+            ip="127.0.0.1", mac="", state="REACHABLE",
+            first_seen=1.0, last_seen=1.0,
+        )
+        findings = mon.probe("127.0.0.1")
+        assert len(findings) >= 1
+        assert any(f.type in ("HOST_REACHABLE", "HOST_UNREACHABLE") for f in findings)
+
+
+# ================================================================
+# Telecom/SS7 live monitor
+# ================================================================
+
+class TestTelecomMonitorMerge:
+    def _subscriber(self, msisdn="13105551234"):
+        from simulator import Subscriber
+        return Subscriber(msisdn=msisdn, imsi="310260123456789", roaming=False, lac="LAC1234")
+
+    def test_new_subscriber_tracked_on_first_event(self):
+        from modules.telecom.monitor import merge_activity
+        sub = self._subscriber()
+        registry = {}
+        entries = [{"msisdn": sub.msisdn, "op": "SRI", "suspicious": False}]
+        merge_activity(registry, {sub.msisdn: sub}, entries, now=1.0)
+        t = registry[sub.msisdn]
+        assert t.events == 1
+        assert t.suspicious_events == 0
+        assert t.last_op == "SRI"
+
+    def test_suspicious_event_counted(self):
+        from modules.telecom.monitor import merge_activity
+        sub = self._subscriber()
+        registry = {}
+        entries = [
+            {"msisdn": sub.msisdn, "op": "SRI", "suspicious": False},
+            {"msisdn": sub.msisdn, "op": "ISD", "suspicious": True},
+        ]
+        merge_activity(registry, {sub.msisdn: sub}, entries, now=2.0)
+        t = registry[sub.msisdn]
+        assert t.events == 2
+        assert t.suspicious_events == 1
+        assert t.last_op == "ISD"
+
+    def test_unknown_subscriber_skipped(self):
+        from modules.telecom.monitor import merge_activity
+        registry = {}
+        entries = [{"msisdn": "99999999999", "op": "SRI", "suspicious": False}]
+        merge_activity(registry, {}, entries, now=1.0)
+        assert registry == {}
+
+
+class TestTelecomMonitor:
+    def test_poll_tracks_synthetic_traffic(self):
+        from modules.telecom.monitor import TelecomMonitor
+        mon = TelecomMonitor({}, subscriber_count=5)
+        msisdn = next(iter(mon.db._db))
+        mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
+        results = mon.poll()
+        assert any(s.msisdn == msisdn for s in results)
+
+    def test_probe_flags_suspicious_subscriber(self):
+        from modules.telecom.monitor import TelecomMonitor
+        mon = TelecomMonitor({}, subscriber_count=5)
+        msisdn = next(iter(mon.db._db))
+        mon.hlr.handle_isd(msisdn, "203.0.113.9", 2)  # rejected + flagged suspicious
+        mon.poll()
+        findings = mon.probe(msisdn)
+        assert any(f.type == "SUBSCRIBER_DATA_MANIPULATION" for f in findings)
+
+    def test_probe_nominal_subscriber(self):
+        from modules.telecom.monitor import TelecomMonitor
+        mon = TelecomMonitor({}, subscriber_count=5)
+        msisdn = next(iter(mon.db._db))
+        mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
+        mon.poll()
+        findings = mon.probe(msisdn)
+        assert not any(f.type == "SUBSCRIBER_DATA_MANIPULATION" for f in findings)
+
+    def test_probe_unknown_subscriber_empty(self):
+        from modules.telecom.monitor import TelecomMonitor
+        mon = TelecomMonitor({}, subscriber_count=5)
+        assert mon.probe("00000000000") == []
+
+    def test_start_and_stop_traffic(self):
+        from modules.telecom.monitor import TelecomMonitor
+        mon = TelecomMonitor({}, subscriber_count=5)
+        mon.start_traffic(interval=0.01)
+        import time as _time
+        _time.sleep(0.15)
+        mon.stop_traffic()
+        results = mon.poll()
+        assert isinstance(results, list)
