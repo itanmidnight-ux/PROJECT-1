@@ -922,7 +922,7 @@ class TestTelecomMonitor:
         msisdn = next(iter(mon.db._db))
         mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
         results = mon.poll()
-        assert any(s.msisdn == msisdn for s in results)
+        assert any(item.key == msisdn and item.kind == "lab" for item in results)
 
     def test_probe_flags_suspicious_subscriber(self):
         from modules.telecom.monitor import TelecomMonitor
@@ -956,3 +956,167 @@ class TestTelecomMonitor:
         mon.stop_traffic()
         results = mon.poll()
         assert isinstance(results, list)
+
+    def test_no_device_source_yields_no_device_row(self, monkeypatch):
+        from modules.telecom import monitor as monitor_mod
+        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: None)
+        mon = monitor_mod.TelecomMonitor({}, subscriber_count=3)
+        results = mon.poll()
+        assert not any(item.kind == "device" for item in results)
+        assert mon.probe(monitor_mod.DEVICE_KEY) == []
+
+    def test_device_row_pinned_first_when_present(self, monkeypatch):
+        from modules.telecom import monitor as monitor_mod
+        from modules.telecom.device_telephony import DeviceTelephony
+        dt = DeviceTelephony(source="termux-api", network_operator_name="Test Carrier",
+                              network_type="LTE")
+        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
+        mon = monitor_mod.TelecomMonitor({}, subscriber_count=3)
+        msisdn = next(iter(mon.db._db))
+        mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
+        results = mon.poll()
+        assert results[0].kind == "device"
+        assert results[0].key == monitor_mod.DEVICE_KEY
+        assert results[0].label == "Test Carrier"
+
+    def test_device_probe_flags_insecure_rat(self, monkeypatch):
+        from modules.telecom import monitor as monitor_mod
+        from modules.telecom.device_telephony import DeviceTelephony
+        dt = DeviceTelephony(source="getprop", network_operator_name="Carrier X",
+                              network_type="GSM")
+        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
+        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
+        mon.poll()
+        findings = mon.probe(monitor_mod.DEVICE_KEY)
+        assert any(f.type == "INSECURE_RADIO_ACCESS_TECHNOLOGY" for f in findings)
+
+    def test_device_probe_nominal_on_lte(self, monkeypatch):
+        from modules.telecom import monitor as monitor_mod
+        from modules.telecom.device_telephony import DeviceTelephony
+        dt = DeviceTelephony(source="termux-api", network_operator_name="Carrier X",
+                              network_type="LTE")
+        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
+        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
+        mon.poll()
+        findings = mon.probe(monitor_mod.DEVICE_KEY)
+        assert not any(f.type == "INSECURE_RADIO_ACCESS_TECHNOLOGY" for f in findings)
+        assert any(f.type == "RADIO_NOMINAL" for f in findings)
+
+    def test_device_probe_weak_signal(self, monkeypatch):
+        from modules.telecom import monitor as monitor_mod
+        from modules.telecom.device_telephony import CellInfo, DeviceTelephony
+        dt = DeviceTelephony(source="termux-api", network_operator_name="Carrier X",
+                              network_type="LTE",
+                              cells=[CellInfo(cell_type="lte", registered=True, dbm=-115)])
+        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
+        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
+        mon.poll()
+        findings = mon.probe(monitor_mod.DEVICE_KEY)
+        assert any(f.type == "WEAK_SIGNAL" for f in findings)
+
+    def test_device_unreachable_stops_reprobing(self, monkeypatch):
+        from modules.telecom import monitor as monitor_mod
+        calls = {"n": 0}
+        def fake_detect():
+            calls["n"] += 1
+            return None
+        monkeypatch.setattr(monitor_mod, "detect_real_telephony", fake_detect)
+        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
+        mon.poll()
+        mon.poll()
+        mon.poll()
+        assert calls["n"] == 1  # only probed once, then remembered as unavailable
+
+
+# ================================================================
+# Real device telephony detection (Termux:API / root+dumpsys / getprop)
+# ================================================================
+
+class TestDeviceTelephony:
+    def test_no_sources_available(self, monkeypatch):
+        from modules.telecom import device_telephony as dtmod
+        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: False)
+        assert dtmod.detect_real_telephony() is None
+
+    def test_termux_api_info_and_cellinfo(self, monkeypatch):
+        from modules.telecom import device_telephony as dtmod
+        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: True)
+
+        info_json = (
+            '{"network_operator_name":"Test Carrier","network_type":"LTE",'
+            '"sim_state":"READY","sim_operator_name":"Test Carrier","data_state":"connected"}'
+        )
+        cell_json = '[{"type":"lte","registered":true,"mcc":"310","mnc":"260",' \
+                    '"lac":"1234","cid":"5678","dbm":-85,"level":3}]'
+
+        def fake_run(cmd, timeout=5):
+            if cmd[0] == "termux-telephony-info":
+                return 0, info_json
+            if cmd[0] == "termux-telephony-cellinfo":
+                return 0, cell_json
+            return -1, ""
+
+        monkeypatch.setattr(dtmod, "_run", fake_run)
+        dt = dtmod.detect_real_telephony()
+        assert dt is not None
+        assert dt.source == "termux-api"
+        assert dt.network_operator_name == "Test Carrier"
+        assert dt.network_type == "LTE"
+        assert len(dt.cells) == 1
+        assert dt.cells[0].dbm == -85
+        assert dt.cells[0].mcc == "310"
+
+    def test_termux_api_bad_json_returns_none(self, monkeypatch):
+        from modules.telecom import device_telephony as dtmod
+        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: name == "termux-telephony-info")
+        monkeypatch.setattr(dtmod, "_run", lambda cmd, timeout=5: (0, "not json"))
+        assert dtmod.detect_real_telephony() is None
+
+    def test_dumpsys_parsing(self):
+        from modules.telecom.device_telephony import parse_dumpsys_telephony
+        sample = (
+            "mOperatorAlphaLong=Test Carrier mDataNetworkType=LTE "
+            "mSignalStrength=SignalStrength: -95 dBm mIsRoaming=false"
+        )
+        dt = parse_dumpsys_telephony(sample)
+        assert dt is not None
+        assert dt.source == "dumpsys"
+        assert dt.network_operator_name == "Test Carrier"
+        assert dt.network_type == "LTE"
+        assert dt.roaming is False
+        assert dt.cells and dt.cells[0].dbm == -95
+
+    def test_dumpsys_parsing_no_useful_fields_returns_none(self):
+        from modules.telecom.device_telephony import parse_dumpsys_telephony
+        assert parse_dumpsys_telephony("garbage output with nothing useful") is None
+
+    def test_getprop_fallback(self, monkeypatch):
+        from modules.telecom import device_telephony as dtmod
+        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: name == "getprop")
+
+        def fake_run(cmd, timeout=5):
+            prop = cmd[-1]
+            values = {
+                "gsm.operator.alpha": "Test Carrier",
+                "gsm.network.type":   "LTE",
+                "gsm.sim.state":      "READY",
+            }
+            return 0, values.get(prop, "")
+
+        monkeypatch.setattr(dtmod, "_run", fake_run)
+        dt = dtmod.detect_real_telephony()
+        assert dt is not None
+        assert dt.source == "getprop"
+        assert dt.network_operator_name == "Test Carrier"
+
+    def test_device_is_risky_flags_2g(self):
+        from modules.telecom.device_telephony import DeviceTelephony
+        from modules.telecom.monitor import device_is_risky
+        dt = DeviceTelephony(source="getprop", network_type="GSM")
+        assert device_is_risky(dt) is True
+
+    def test_device_is_risky_false_on_lte(self):
+        from modules.telecom.device_telephony import DeviceTelephony
+        from modules.telecom.monitor import device_is_risky
+        dt = DeviceTelephony(source="getprop", network_type="LTE")
+        assert device_is_risky(dt) is False

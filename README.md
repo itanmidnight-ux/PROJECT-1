@@ -32,7 +32,8 @@ cyberscope/
 │   │   ├── protocols.py         # MAP / TCAP / SCCP / M3UA / SCTP / BER
 │   │   ├── analyzer.py            # anomaly detection + findings
 │   │   ├── simulator.py             # HLR / VLR / MSC / SMSC simulation
-│   │   └── monitor.py               # live subscriber-activity registry
+│   │   ├── device_telephony.py      # real device radio state (Termux:API / root / getprop)
+│   │   └── monitor.py               # live subscriber-activity + device-radio registry
 │   ├── wifi/
 │   │   ├── scanner.py          # nmcli / iw / iwlist based scanning + analysis
 │   │   └── monitor.py          # live scan registry + monitor-mode toggle
@@ -121,7 +122,7 @@ numbered list of what's actually there:
 | **Network** | IP, MAC, ARP state, times seen (from the kernel neighbor table — read-only, no packets sent) | ICMP reachability + a short, non-destructive TCP connect check of common ports |
 | **WiFi** | SSID, BSSID, signal, channel, security | first/last seen, times seen |
 | **Bluetooth** | name, address, classic/BLE, times seen | first/last seen, times seen |
-| **Telecom/SS7** | MSISDN, IMSI, event count, suspicious flag (from the laboratory HLR/VLR/SMSC simulator's live subscriber activity — see below) | roaming status, LAC, last operation |
+| **Telecom/SS7** | source (📱 real device / 🧪 lab sim), id, event count, alert flag — see below | operator/radio fields for the device row; roaming/LAC/last-op for lab subscribers |
 
 Typing a number "locks" onto that one item — a live-updating detail panel
 takes over showing every known field, plus the result of an automatic
@@ -138,16 +139,43 @@ managed mode on exit. Without root or driver support, it falls back to
 active scanning automatically — the header always shows which mode is in
 effect.
 
+### Telecom/SS7 live monitor — two clearly-labeled sources
+
 The Telecom/SS7 live monitor is always available, the same way the
-one-shot telecom scan is: the module's own laboratory simulator (no real
-SIGTRAN/operator connectivity) runs a background generator of realistic
-subscriber activity — SendRoutingInfo, UpdateLocation, occasional
-InsertSubscriberData attempts — against the same HLR/VLR/SMSC handlers
-real MAP traffic would hit. The HLR rejects and flags ISD attempts exactly
-like a real network element would, and that's what the live monitor's
-security probe surfaces per subscriber. To analyze *real* captured SS7
-traffic, feed a PCAP through the existing `SS7Analyzer`
-(`modules/telecom/analyzer.py`) directly.
+one-shot telecom scan is, and combines two data sources that are never
+mixed together or mistaken for one another:
+
+- **📱 Device (real)** — the actual cellular state of the device
+  CyberScope is running on, via `modules/telecom/device_telephony.py`.
+  Tried in order of how much access each needs, degrading gracefully
+  (a source that isn't reachable is simply skipped, never faked):
+  1. **Termux:API** (`pkg install termux-api` + the companion app) —
+     `termux-telephony-info` / `termux-telephony-cellinfo`. No root
+     needed beyond the one-time Android permission grant.
+  2. **Root** — `su -c "dumpsys telephony.registry"` on a rooted
+     device/Termux (e.g. Magisk). Best-effort text parsing since the
+     format varies by Android version.
+  3. **`getprop gsm.*`** — a handful of read-only properties available
+     without any special permission on most Android builds.
+
+  When reachable, it's pinned first in the list and refreshed live each
+  cycle (operator, network type, serving cell, signal). Its security
+  probe flags real, well-known mobile-security issues: registration on
+  a legacy 2G/GSM-class network (no mutual authentication — the
+  precondition for fake base station / IMSI-catcher attacks) and weak
+  signal that could push a fallback to a less secure network.
+
+- **🧪 Lab (simulado)** — the module's own laboratory simulator (no real
+  SIGTRAN/operator connectivity). A background generator drives
+  realistic synthetic subscriber activity — SendRoutingInfo,
+  UpdateLocation, occasional InsertSubscriberData attempts — against
+  the same HLR/VLR/SMSC handlers real MAP traffic would hit. The HLR
+  rejects and flags ISD attempts exactly like a real network element
+  would, and that's what the security probe surfaces per subscriber.
+
+To analyze *real captured* SS7 traffic (a PCAP from a SIGTRAN link),
+feed it through the existing `SS7Analyzer` (`modules/telecom/analyzer.py`)
+directly.
 
 ## Quick start
 

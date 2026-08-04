@@ -243,36 +243,67 @@ def _run_network_monitor(engine, caps) -> None:
 
 
 def _run_telecom_monitor(engine, caps) -> None:
-    from modules.telecom.monitor import TelecomMonitor
+    from modules.telecom.monitor import DEVICE_KEY, TelecomMonitor
     from ui.live_view import ListColumn, activation_progress, run_live_detail, run_live_list
 
     mon = TelecomMonitor(engine.cfg)
 
     try:
         activation_progress("Telecom / SS7 Monitor", [
+            ("Buscando telefonía real del dispositivo (Termux:API / root / getprop)",
+                mon._poll_device),
             ("Cargando base de suscriptores sintética",       lambda: len(mon.db._db)),
             ("Iniciando generador de tráfico de laboratorio", mon.start_traffic),
             ("Recolectando actividad inicial",                mon.poll),
         ])
 
         def subtitle() -> str:
-            return (f"Modo laboratorio (simulador) · "
+            src = "dispositivo real detectado" if mon.device_info else "sin telefonía real accesible"
+            return (f"{src} · laboratorio SS7 (simulador) · "
                     f"{len(mon.registry)} suscriptor(es) con actividad")
 
         columns = [
-            ListColumn("MSISDN",     lambda s: s.msisdn),
-            ListColumn("IMSI",       lambda s: s.imsi),
-            ListColumn("Eventos",    lambda s: str(s.events)),
-            ListColumn("Sospechoso", lambda s: "⚠" if s.suspicious_events else "—"),
+            ListColumn("Fuente",    lambda i: "📱 Dispositivo" if i.kind == "device" else "🧪 Lab (simulado)"),
+            ListColumn("Id",        lambda i: i.label),
+            ListColumn("Detalle",   lambda i: i.secondary or "—"),
+            ListColumn("Eventos",   lambda i: str(i.events)),
+            ListColumn("Alerta",    lambda i: "⚠" if i.suspicious else "—"),
         ]
 
         selected = run_live_list("Telecom/SS7 Monitor — Actividad en vivo", subtitle, mon.poll, columns)
         if selected is None:
             return
 
-        def detail(sub) -> dict:
+        def detail(item) -> dict:
             mon.poll()
-            t = mon.registry.get(sub.msisdn, sub)
+            if item.kind == "device":
+                dt = mon.device_info
+                if dt is None:
+                    return {"Estado": "Telefonía real no disponible en este ciclo"}
+                fields = {
+                    "Fuente de datos": dt.source,
+                    "Operador":        dt.network_operator_name or "desconocido",
+                    "Tipo de red":     dt.network_type or "desconocido",
+                    "Estado SIM":      dt.sim_state or "desconocido",
+                    "Operador SIM":    dt.sim_operator_name or "desconocido",
+                    "Estado de datos": dt.data_state or "desconocido",
+                    "Roaming":         "Sí" if dt.roaming else ("No" if dt.roaming is not None else "desconocido"),
+                }
+                if dt.cells:
+                    c = dt.cells[0]
+                    fields.update({
+                        "Celda: tipo":       c.cell_type or "desconocido",
+                        "Celda: registrada": "Sí" if c.registered else "No",
+                        "MCC/MNC":           f"{c.mcc}/{c.mnc}" if c.mcc else "desconocido",
+                        "LAC/TAC":           c.lac or c.tac or "desconocido",
+                        "Cell ID":           c.cid or "desconocido",
+                        "Señal":             f"{c.dbm} dBm" if c.dbm is not None else "desconocido",
+                    })
+                return fields
+
+            t = mon.registry.get(item.key)
+            if t is None:
+                return {"Estado": "Suscriptor ya no está en el registro"}
             return {
                 "MSISDN":              t.msisdn,
                 "IMSI":                t.imsi,
@@ -284,8 +315,8 @@ def _run_telecom_monitor(engine, caps) -> None:
             }
 
         run_live_detail(
-            f"Suscriptor — {selected.msisdn}", selected, detail,
-            probe_fn=lambda s: mon.probe(s.msisdn),
+            f"Telecom — {selected.label}", selected, detail,
+            probe_fn=lambda i: mon.probe(i.key),
         )
     finally:
         mon.stop_traffic()

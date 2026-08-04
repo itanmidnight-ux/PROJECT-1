@@ -1,22 +1,24 @@
 """
 CyberScope — modules/telecom/monitor.py
 
-Live Telecom/SS7 monitor. The telecom capability is always available as
-a laboratory simulator (no real SIGTRAN/operator connectivity — see
-modules/telecom/simulator.py), so "listening for signals" here means
-watching subscriber activity as it hits the same HLR/VLR/SMSC handlers
-real MAP traffic would: SendRoutingInfo, UpdateLocation, SMS routing,
-and occasional InsertSubscriberData attempts, which the HLR already
-rejects and flags suspicious exactly like a real network element would.
+Live Telecom/SS7 monitor with two data sources, clearly labeled so
+neither is ever mistaken for the other:
 
-A background thread generates that synthetic traffic so the live view
-has something to show without a physical SIGTRAN capture; each
-subscriber's activity is tracked in a live registry the same way
-WiFiMonitor/BluetoothMonitor/NetworkMonitor track their devices.
+  1. "device"  — the real cellular state of the device CyberScope is
+     running on (modules/telecom/device_telephony.py): operator,
+     network type, serving cell, signal strength. Only present when a
+     real source is actually reachable (Termux:API, root+dumpsys, or
+     getprop) — never faked.
 
-For real captured traffic, feed a PCAP through the existing
-SS7Analyzer (modules/telecom/analyzer.py) directly — this module
-covers the always-available simulator path.
+  2. "lab"     — the always-available SS7 laboratory simulator
+     (modules/telecom/simulator.py). A background thread generates
+     realistic synthetic subscriber activity — SendRoutingInfo,
+     UpdateLocation, occasional InsertSubscriberData attempts — against
+     the same HLR/VLR/SMSC handlers real MAP traffic would hit; the HLR
+     rejects and flags ISD exactly like a real network element would.
+
+Both feed the same live list→detail registry pattern used by the
+network/wifi/bluetooth monitors.
 """
 from __future__ import annotations
 
@@ -29,12 +31,19 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.types import Finding, Severity
+from modules.telecom.device_telephony import DeviceTelephony, detect_real_telephony
 
 _TELECOM_DIR = str(Path(__file__).parent)
 if _TELECOM_DIR not in sys.path:
     sys.path.insert(0, _TELECOM_DIR)
 
 from simulator import SimulatedHLR, SimulatedSMSC, SimulatedVLR, Subscriber, SubscriberDB  # noqa: E402
+
+DEVICE_KEY = "__device__"
+
+# Legacy radio access technologies with no mutual network authentication —
+# the well-known precondition for fake base station / IMSI-catcher attacks.
+_INSECURE_RATS = ("GSM", "EDGE", "GPRS", "2G", "1XRTT", "CDMA", "IDEN")
 
 
 @dataclass
@@ -48,6 +57,18 @@ class TrackedSubscriber:
     suspicious_events: int   = 0
     last_op:           str   = ""
     last_seen:         float = 0.0
+
+
+@dataclass
+class TelecomListItem:
+    """Uniform row for the live list, whether it came from the real
+    device radio or the laboratory simulator."""
+    key:        str
+    kind:       str    # "device" or "lab"
+    label:      str
+    secondary:  str
+    events:     int
+    suspicious: int
 
 
 def merge_activity(
@@ -81,12 +102,20 @@ def merge_activity(
     return registry
 
 
+def device_is_risky(dt: DeviceTelephony) -> bool:
+    """Pure check used both to flag the list row and to build the probe
+    findings — kept as one function so the two never disagree."""
+    nt = (dt.network_type or "").upper()
+    if any(rat in nt for rat in _INSECURE_RATS):
+        return True
+    return any(c.dbm is not None and c.dbm <= -110 for c in dt.cells)
+
+
 class TelecomMonitor:
     """
-    Continuous laboratory SS7 monitor: a synthetic subscriber DB behind
-    the same SimulatedHLR/VLR/SMSC handlers the rest of the telecom
-    module uses, with a background traffic generator and a live,
-    per-subscriber activity registry.
+    Continuous telecom monitor: real device radio state when a source is
+    reachable, plus the laboratory SS7 simulator's live subscriber
+    activity (always available).
     """
 
     def __init__(self, cfg: Dict[str, Any], subscriber_count: int = 15) -> None:
@@ -102,9 +131,16 @@ class TelecomMonitor:
         self._traffic_thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
+        self._device_info: Optional[DeviceTelephony] = None
+        self._device_checked = False   # True once we know real telephony is/isn't reachable
+
     @property
     def available(self) -> bool:
         return True  # simulator is always available, per the capability report
+
+    @property
+    def device_info(self) -> Optional[DeviceTelephony]:
+        return self._device_info
 
     # ── Synthetic traffic ────────────────────────────────────────────
 
@@ -138,16 +174,114 @@ class TelecomMonitor:
 
     # ── Live registry ─────────────────────────────────────────────────
 
-    def poll(self) -> List[TrackedSubscriber]:
-        """Merge any new audit-log entries into the live registry,
-        return current list, most recently active first."""
+    def _poll_device(self) -> Optional[TelecomListItem]:
+        """Re-probe real telephony each cycle so signal/operator stay
+        live — but only while a source is actually reachable. Once a
+        probe comes back empty we stop retrying every cycle so an
+        Android device without Termux:API/root isn't hit with repeated
+        failing subprocess calls on every refresh."""
+        if self._device_checked and self._device_info is None:
+            return None
+
+        dt = detect_real_telephony()
+        self._device_checked = True
+        self._device_info = dt
+        if dt is None:
+            return None
+
+        cell = dt.cells[0] if dt.cells else None
+        return TelecomListItem(
+            key=DEVICE_KEY, kind="device",
+            label=dt.network_operator_name or "This device",
+            secondary=dt.network_type or (cell.cell_type if cell else "unknown"),
+            events=len(dt.cells),
+            suspicious=1 if device_is_risky(dt) else 0,
+        )
+
+    def poll(self) -> List[TelecomListItem]:
+        """Merge any new audit-log entries into the live registry and
+        re-check real device telephony; return the current list with
+        the device row (if present) pinned first."""
+        items: List[TelecomListItem] = []
+
+        device_item = self._poll_device()
+        if device_item is not None:
+            items.append(device_item)
+
         log = self.db.query_log()
         new_entries = log[self._processed:]
         self._processed = len(log)
         merge_activity(self.registry, self.db._db, new_entries)
-        return sorted(self.registry.values(), key=lambda s: s.last_seen, reverse=True)
 
-    def probe(self, msisdn: str) -> List[Finding]:
+        for s in sorted(self.registry.values(), key=lambda s: s.last_seen, reverse=True):
+            items.append(TelecomListItem(
+                key=s.msisdn, kind="lab", label=s.msisdn, secondary=s.imsi,
+                events=s.events, suspicious=s.suspicious_events,
+            ))
+        return items
+
+    # ── Security probes ──────────────────────────────────────────────
+
+    def probe(self, key: str) -> List[Finding]:
+        if key == DEVICE_KEY:
+            return self._probe_device()
+        return self._probe_subscriber(key)
+
+    def _probe_device(self) -> List[Finding]:
+        dt = self._device_info
+        if dt is None:
+            return []
+
+        findings: List[Finding] = []
+        nt = (dt.network_type or "").upper()
+        if any(rat in nt for rat in _INSECURE_RATS):
+            findings.append(Finding(
+                type="INSECURE_RADIO_ACCESS_TECHNOLOGY",
+                severity=Severity.HIGH,
+                description=(
+                    f"Device is registered on {dt.network_type}, a legacy radio "
+                    f"technology with no mutual network authentication — "
+                    f"vulnerable to fake base station / IMSI-catcher attacks."
+                ),
+                evidence=f"network_type={dt.network_type} operator={dt.network_operator_name}",
+                recommendation=(
+                    "Disable 2G fallback if supported (Android 12+: Settings > "
+                    "Network & Internet > SIMs > Allow 2G), or use a carrier/device "
+                    "that enforces LTE/5G-only registration."
+                ),
+                module="telecom",
+                mitre="T1449",
+            ))
+        if dt.roaming:
+            findings.append(Finding(
+                type="DEVICE_ROAMING",
+                severity=Severity.INFO,
+                description=f"Device is currently roaming on {dt.network_operator_name}.",
+                module="telecom",
+            ))
+        for cell in dt.cells:
+            if cell.dbm is not None and cell.dbm <= -110:
+                findings.append(Finding(
+                    type="WEAK_SIGNAL",
+                    severity=Severity.LOW,
+                    description=(
+                        f"Weak signal ({cell.dbm} dBm) — a device with poor "
+                        f"coverage is more likely to fall back to a less secure "
+                        f"network technology."
+                    ),
+                    evidence=f"dbm={cell.dbm} type={cell.cell_type}",
+                    module="telecom",
+                ))
+        if not findings:
+            findings.append(Finding(
+                type="RADIO_NOMINAL",
+                severity=Severity.INFO,
+                description="No radio access technology or signal issues detected.",
+                module="telecom",
+            ))
+        return findings
+
+    def _probe_subscriber(self, msisdn: str) -> List[Finding]:
         """Flag subscribers with suspicious activity — the same
         defensive signal the HLR itself raises on a rejected ISD,
         scoped to one subscriber."""

@@ -57,6 +57,20 @@ def header_panel(title: str, subtitle: str = "") -> Panel:
     return Panel(text, style="cyan", padding=(0, 2))
 
 
+def _format_value(v: Any) -> str:
+    """Stable, consistent rendering for a detail-view value so the same
+    field never prints differently between refreshes (e.g. a float
+    that gains/loses trailing zeros, or None showing up as the literal
+    string 'None')."""
+    if v is None:
+        return "—"
+    if isinstance(v, bool):
+        return "Sí" if v else "No"
+    if isinstance(v, float):
+        return f"{v:.3f}"
+    return str(v)
+
+
 def activation_progress(
     title: str,
     steps: Sequence[Tuple[str, Callable[[], Any]]],
@@ -205,11 +219,15 @@ def run_live_detail(
                     fields = {"error": str(exc)}
                 last_poll = now
 
-            detail_table = Table(show_header=False, expand=True, box=None)
-            detail_table.add_column("Field", style="bold cyan", ratio=1)
-            detail_table.add_column("Value", ratio=3)
+            # Field labels never wrap (no_wrap + auto-fit to content) so a
+            # row is always exactly one line — a fixed ratio here would
+            # let a slightly-too-long label wrap and visibly deform the
+            # panel between refreshes.
+            detail_table = Table(show_header=False, expand=True, box=None, padding=(0, 1))
+            detail_table.add_column("Field", style="bold cyan", no_wrap=True)
+            detail_table.add_column("Value", ratio=1, overflow="fold")
             for k, v in fields.items():
-                detail_table.add_row(str(k), str(v))
+                detail_table.add_row(str(k), _format_value(v))
 
             sec_lines: List[str] = []
             if probe_fn is not None:
