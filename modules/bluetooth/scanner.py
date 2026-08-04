@@ -14,23 +14,14 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.types import Finding, ModuleResult, ModuleStatus, Severity
+from core.shell import run as _shell_run
+from core.shell import safe_iterdir as _safe_iterdir
+from core.net_vendor import classify_mac
 
 
 def _run(cmd: List[str], timeout: int = 15) -> tuple[int, str]:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.returncode, r.stdout + r.stderr
-    except Exception as e:
-        return -1, str(e)
-
-
-def _safe_iterdir(path: Path) -> List[Path]:
-    """List a directory, tolerating sysfs paths SELinux blocks (Termux/Android)."""
-    try:
-        return list(path.iterdir())
-    except (PermissionError, OSError):
-        return []
+    r = _shell_run(cmd, timeout)
+    return r.returncode, (r.stderr if r.returncode == -1 and not r.stdout else r.combined)
 
 
 # ── Models ────────────────────────────────────────────────────────────────────
@@ -42,7 +33,16 @@ class BTDevice:
     cls:      str     = ""        # Device class
     rssi:     int     = 0
     le:       bool    = False     # BLE device
+    vendor:   str     = ""
     services: List[str] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        # BLE devices commonly use private/randomized addresses (the
+        # BLE analogue of WiFi MAC randomization) -- classify_mac's
+        # locally-administered bit check surfaces that honestly instead
+        # of guessing a vendor for it.
+        if not self.vendor and self.address:
+            self.vendor = classify_mac(self.address).label
 
 
 @dataclass

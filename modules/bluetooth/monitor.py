@@ -23,12 +23,14 @@ class TrackedDevice:
     le:         bool
     first_seen: float
     last_seen:  float
+    vendor:     str = ""   # copied from BTDevice.vendor -- see core.net_vendor
     seen_count: int = 1
 
     def update(self, dev: BTDevice, now: float) -> None:
         if dev.name not in ("", "Unknown", "Unknown BLE"):
             self.name = dev.name
         self.le = self.le or dev.le
+        self.vendor = dev.vendor or self.vendor
         self.last_seen = now
         self.seen_count += 1
 
@@ -48,7 +50,7 @@ def merge_scan(
         else:
             registry[key] = TrackedDevice(
                 address=dev.address, name=dev.name or "Unknown",
-                le=dev.le, first_seen=now, last_seen=now,
+                le=dev.le, vendor=dev.vendor, first_seen=now, last_seen=now,
             )
     return registry
 

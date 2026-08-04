@@ -10,21 +10,16 @@ import os
 import platform
 import re
 import shutil
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List
 
 from core.types import Finding, ModuleResult, ModuleStatus, Severity
+from core.shell import run as _shell_run
 
 
 def _run(cmd: List[str], timeout: int = 5) -> str:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.stdout
-    except Exception:
-        return ""
+    return _shell_run(cmd, timeout).stdout
 
 
 class DeviceAnalyzer:

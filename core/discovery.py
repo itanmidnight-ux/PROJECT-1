@@ -19,8 +19,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
-import subprocess
 import platform
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -29,36 +27,21 @@ from typing import Any, Dict, List, Optional
 
 from .types import CapabilityInfo, ModuleStatus
 from .permissions import PrivilegeStatus, detect_privileges
+from .shell import safe_iterdir as _safe_iterdir
+from .shell import tool_exists as _tool_exists
+from .shell import run as _shell_run
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
 
 def _run(cmd: List[str], timeout: int = 5) -> tuple[int, str, str]:
     """Run a command, return (returncode, stdout, stderr). Never raises."""
-    try:
-        r = subprocess.run(
-            cmd, capture_output=True, text=True,
-            timeout=timeout, errors="replace",
-        )
-        return r.returncode, r.stdout, r.stderr
-    except (FileNotFoundError, subprocess.TimeoutExpired, PermissionError) as e:
-        return -1, "", str(e)
-
-
-def _tool_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    r = _shell_run(cmd, timeout)
+    return r.returncode, r.stdout, r.stderr
 
 
 def _sysfs_exists(path: str) -> bool:
     return Path(path).exists()
-
-
-def _safe_iterdir(path: Path) -> List[Path]:
-    """List a directory, tolerating sysfs paths SELinux blocks (Termux/Android)."""
-    try:
-        return list(path.iterdir())
-    except (PermissionError, OSError):
-        return []
 
 
 # ── OS / environment ─────────────────────────────────────────────────────────

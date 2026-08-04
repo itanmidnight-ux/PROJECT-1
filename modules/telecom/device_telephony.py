@@ -21,23 +21,16 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Tuple
 
+from core.shell import run as _shell_run
+from core.shell import tool_exists as _tool_exists
+
 
 def _run(cmd: List[str], timeout: int = 5) -> Tuple[int, str]:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.returncode, r.stdout
-    except Exception as e:
-        return -1, str(e)
-
-
-def _tool_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+    r = _shell_run(cmd, timeout)
+    return r.returncode, (r.stderr if r.returncode == -1 and not r.stdout else r.stdout)
 
 
 @dataclass

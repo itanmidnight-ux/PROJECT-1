@@ -13,30 +13,20 @@ from __future__ import annotations
 
 import os
 import re
-import subprocess
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.types import CapabilityInfo, Finding, ModuleResult, ModuleStatus, Severity
+from core.shell import run as _shell_run
+from core.shell import safe_iterdir as _safe_iterdir
+from core.net_vendor import classify_mac
 
 
 def _run(cmd: List[str], timeout: int = 15) -> tuple[int, str]:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.returncode, r.stdout + r.stderr
-    except Exception as e:
-        return -1, str(e)
-
-
-def _safe_iterdir(path: Path) -> List[Path]:
-    """List a directory, tolerating sysfs paths SELinux blocks (Termux/Android)."""
-    try:
-        return list(path.iterdir())
-    except (PermissionError, OSError):
-        return []
+    r = _shell_run(cmd, timeout)
+    return r.returncode, (r.stderr if r.returncode == -1 and not r.stdout else r.combined)
 
 
 # ── Network model ─────────────────────────────────────────────────────────────
@@ -51,6 +41,12 @@ class WiFiNetwork:
     security:  str     = "UNKNOWN"
     mode:      str     = "infrastructure"
     vendor:    str     = ""
+
+    def __post_init__(self) -> None:
+        # BSSID is the AP's MAC -- derive vendor once, here, so every
+        # construction path (nmcli/iw/iwlist parsing) gets it for free.
+        if not self.vendor and self.bssid:
+            self.vendor = classify_mac(self.bssid).label
 
     @property
     def security_level(self) -> str:

@@ -35,7 +35,7 @@ from core.types import (
     CapabilityInfo, Finding, ModuleResult, ModuleStatus, Severity,
 )
 from core.config import load_config
-from ai.engine  import RiskEngine, AIReport
+from ai.engine  import RiskEngine, AIReport, ExplainedFinding
 
 
 # ================================================================
@@ -290,6 +290,21 @@ BSS aa:bb:cc:dd:ee:ff(on wlan0)
         nets = scanner._scan_nmcli() if False else []  # Don't actually run nmcli
         assert isinstance(nets, list)
 
+    def test_vendor_derived_from_bssid(self):
+        from modules.wifi.scanner import WiFiNetwork
+        net = WiFiNetwork(ssid="Test", bssid="00:0C:29:AB:CD:EF")
+        assert net.vendor == "VMware (virtual NIC)"
+
+    def test_vendor_left_empty_without_bssid(self):
+        from modules.wifi.scanner import WiFiNetwork
+        net = WiFiNetwork(ssid="Test")
+        assert net.vendor == ""
+
+    def test_explicit_vendor_not_overwritten(self):
+        from modules.wifi.scanner import WiFiNetwork
+        net = WiFiNetwork(ssid="Test", bssid="00:0C:29:AB:CD:EF", vendor="Custom")
+        assert net.vendor == "Custom"
+
 
 # ================================================================
 # Bluetooth module
@@ -299,6 +314,17 @@ class TestBluetoothScanner:
     def _make(self):
         from modules.bluetooth.scanner import BluetoothScanner
         return BluetoothScanner({})
+
+    def test_vendor_derived_from_address(self):
+        from modules.bluetooth.scanner import BTDevice
+        dev = BTDevice(address="08:00:27:11:22:33")
+        assert dev.vendor == "Oracle VirtualBox (virtual NIC)"
+
+    def test_vendor_flags_ble_private_address(self):
+        from modules.bluetooth.scanner import BTDevice
+        # 0x02 U/L bit set -> classic "locally administered / private" example
+        dev = BTDevice(address="02:00:00:00:00:01", le=True)
+        assert "administered" in dev.vendor.lower()
 
     def test_analyze_discoverable(self):
         from modules.bluetooth.scanner import BTAdapter, BTDevice
@@ -704,6 +730,13 @@ class TestWiFiMonitorMerge:
         assert t.last_seen == 105.0
         assert t.seen_count == 2
 
+    def test_vendor_copied_from_scan(self):
+        from modules.wifi.monitor import merge_scan
+        from modules.wifi.scanner import WiFiNetwork
+        registry = {}
+        merge_scan(registry, [WiFiNetwork(ssid="Net1", bssid="00:0C:29:AB:CD:EF", signal=-50)], now=1.0)
+        assert registry["00:0C:29:AB:CD:EF"].vendor == "VMware (virtual NIC)"
+
     def test_hidden_bssid_key_fallback(self):
         from modules.wifi.monitor import merge_scan
         from modules.wifi.scanner import WiFiNetwork
@@ -779,6 +812,13 @@ class TestBluetoothMonitorMerge:
         assert registry["AA"].name == "RealName"
         assert registry["AA"].seen_count == 2
 
+    def test_vendor_copied_from_scan(self):
+        from modules.bluetooth.monitor import merge_scan
+        from modules.bluetooth.scanner import BTDevice
+        registry = {}
+        merge_scan(registry, [BTDevice(address="08:00:27:11:22:33", name="Phone")], now=1.0)
+        assert registry["08:00:27:11:22:33"].vendor == "Oracle VirtualBox (virtual NIC)"
+
 
 class TestBluetoothMonitorProbe:
     def test_probe_unknown_key_empty(self):
@@ -853,6 +893,26 @@ class TestNetworkMonitorMerge:
         registry = {}
         merge_scan(registry, [{"ip": "", "mac": "AA", "state": "X"}], now=1.0)
         assert registry == {}
+
+    def test_vendor_set_on_first_sighting(self):
+        from modules.network.monitor import merge_scan
+        registry = {}
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "00:0C:29:AB:CD:EF", "state": "REACHABLE"}], now=1.0)
+        assert registry["10.0.0.5"].vendor == "VMware (virtual NIC)"
+
+    def test_vendor_updated_when_mac_learned_later(self):
+        from modules.network.monitor import merge_scan
+        registry = {}
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "", "state": "STALE"}], now=1.0)
+        assert registry["10.0.0.5"].vendor == ""
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "08:00:27:11:22:33", "state": "REACHABLE"}], now=2.0)
+        assert registry["10.0.0.5"].vendor == "Oracle VirtualBox (virtual NIC)"
+
+    def test_vendor_unknown_for_unrecognized_oui(self):
+        from modules.network.monitor import merge_scan
+        registry = {}
+        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "00:11:22:33:44:55", "state": "REACHABLE"}], now=1.0)
+        assert registry["10.0.0.5"].vendor == "Unknown vendor"
 
 
 class TestNetworkMonitorProbe:
@@ -1120,3 +1180,113 @@ class TestDeviceTelephony:
         from modules.telecom.monitor import device_is_risky
         dt = DeviceTelephony(source="getprop", network_type="LTE")
         assert device_is_risky(dt) is False
+
+
+# ================================================================
+# Explainability
+# ================================================================
+
+class TestExplainability:
+    def setup_method(self):
+        self.engine = RiskEngine()
+
+    def _f(self, t: str, s: Severity, mod: str = "test", **kw) -> Finding:
+        return Finding(t, s, kw.pop("description", "desc"), module=mod, **kw)
+
+    def _assert_well_formed(self, ef: ExplainedFinding, finding: Finding):
+        assert isinstance(ef, ExplainedFinding)
+        assert ef.finding is finding
+        for attr in ("what", "why", "risk", "fix"):
+            val = getattr(ef, attr)
+            assert isinstance(val, str)
+            assert len(val.strip()) > 0
+
+    def test_explain_wifi_open_network(self):
+        finding = self._f("WIFI_OPEN_NETWORK", Severity.HIGH, "wifi",
+                           description='Open WiFi network detected: "TestSSID"')
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        assert "plaintext" in ef.why.lower() or "unencrypted" in ef.why.lower()
+
+    def test_explain_wifi_wep_network(self):
+        finding = self._f("WIFI_WEP_NETWORK", Severity.CRITICAL, "wifi",
+                           description='WEP-encrypted network: "TestSSID"')
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        assert "wep" in ef.why.lower()
+
+    def test_explain_aslr_disabled(self):
+        finding = self._f("ASLR_DISABLED", Severity.HIGH, "device",
+                           description="ASLR is disabled (value=0)")
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        assert "aslr" in ef.why.lower() or "address space" in ef.why.lower()
+
+    def test_explain_telecom_type(self):
+        finding = self._f("SUBSCRIBER_DATA_MANIPULATION", Severity.CRITICAL, "telecom",
+                           description="ISD attempt for +1555 from ext-node")
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        assert "ss7" in ef.why.lower() or "map" in ef.why.lower() or "hlr" in ef.why.lower()
+
+    def test_explain_insecure_rat(self):
+        finding = self._f("INSECURE_RADIO_ACCESS_TECHNOLOGY", Severity.HIGH, "telecom",
+                           description="Device is registered on GSM")
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        assert "imsi" in ef.why.lower() or "2g" in ef.why.lower()
+
+    def test_explain_unknown_type_fallback(self):
+        finding = self._f("SOME_UNSEEN_FUTURE_FINDING_TYPE", Severity.MEDIUM, "misc",
+                           description="Something unusual was observed",
+                           evidence="ev=123", recommendation="Do the thing")
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        # Fallback should still surface the finding's own recommendation as the fix.
+        assert ef.fix == "Do the thing"
+
+    def test_explain_unknown_type_fallback_no_recommendation(self):
+        finding = self._f("ANOTHER_UNSEEN_TYPE", Severity.LOW, "misc",
+                           description="Odd but harmless")
+        ef = self.engine.explain(finding)
+        self._assert_well_formed(ef, finding)
+        assert len(ef.fix) > 0
+
+    def test_to_dict_round_trip(self):
+        finding = self._f("WIFI_OPEN_NETWORK", Severity.HIGH, "wifi")
+        ef = self.engine.explain(finding)
+        d = ef.to_dict()
+        assert set(d.keys()) == {"finding", "what", "why", "risk", "fix"}
+        assert isinstance(d["what"], str)
+        assert isinstance(d["why"], str)
+        assert isinstance(d["risk"], str)
+        assert isinstance(d["fix"], str)
+        # severity must be serialised as a plain string, not an enum
+        assert d["finding"]["severity"] == "HIGH"
+        assert isinstance(d["finding"]["severity"], str)
+        assert d["finding"]["type"] == "WIFI_OPEN_NETWORK"
+
+    def test_report_carries_explained_top_findings(self):
+        findings = [
+            self._f("WIFI_OPEN_NETWORK", Severity.HIGH, "wifi"),
+            self._f("ASLR_DISABLED", Severity.HIGH, "device"),
+        ]
+        results = _make_results([("wifi", [findings[0]]), ("device", [findings[1]])])
+        report = self.engine.analyze(results)
+        assert hasattr(report, "explained_top_findings")
+        assert len(report.explained_top_findings) > 0
+        assert all(isinstance(ef, ExplainedFinding) for ef in report.explained_top_findings)
+        assert len(report.explained_top_findings) == len(report.top_findings)
+
+    def test_report_to_dict_includes_explained_top_findings(self):
+        findings = [self._f("WIFI_WEP_NETWORK", Severity.CRITICAL, "wifi")]
+        results = _make_results([("wifi", findings)])
+        report = self.engine.analyze(results)
+        d = report.to_dict()
+        assert "explained_top_findings" in d
+        assert len(d["explained_top_findings"]) > 0
+        assert d["explained_top_findings"][0]["finding"]["type"] == "WIFI_WEP_NETWORK"
+
+    def test_empty_results_no_explained_findings(self):
+        report = self.engine.analyze([])
+        assert report.explained_top_findings == []

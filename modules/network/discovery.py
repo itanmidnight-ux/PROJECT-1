@@ -8,21 +8,17 @@ No root required for most operations.
 from __future__ import annotations
 
 import re
-import subprocess
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from core.types import CapabilityInfo, Finding, ModuleResult, ModuleStatus, Severity
+from core.shell import run as _shell_run
 
 
 def _run(cmd: List[str], timeout: int = 10) -> tuple[int, str]:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.returncode, r.stdout
-    except Exception as e:
-        return -1, ""
+    r = _shell_run(cmd, timeout)
+    return r.returncode, r.stdout
 
 
 # ── Data models ───────────────────────────────────────────────────────────────

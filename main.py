@@ -212,6 +212,7 @@ def _run_network_monitor(engine, caps) -> None:
     columns = [
         ListColumn("IP",     lambda h: h.ip),
         ListColumn("MAC",    lambda h: h.mac or "—"),
+        ListColumn("Vendor", lambda h: h.vendor or "—"),
         ListColumn("Estado", lambda h: h.state or "—"),
         ListColumn("Visto",  lambda h: str(h.seen_count)),
     ]
@@ -226,6 +227,7 @@ def _run_network_monitor(engine, caps) -> None:
         return {
             "IP":            t.ip,
             "MAC":           t.mac or "unknown",
+            "Vendor":        t.vendor or "unknown",
             "Estado ARP":    t.state or "unknown",
             "Primero visto": time.strftime("%H:%M:%S", time.localtime(t.first_seen)),
             "Última vez":    time.strftime("%H:%M:%S", time.localtime(t.last_seen)),
@@ -340,6 +342,7 @@ def _run_wifi_monitor(engine, caps) -> None:
     columns = [
         ListColumn("SSID",     lambda n: n.ssid),
         ListColumn("BSSID",    lambda n: n.bssid or "—"),
+        ListColumn("Vendor",   lambda n: n.vendor or "—"),
         ListColumn("Signal",   lambda n: f"{n.signal} dBm"),
         ListColumn("Channel",  lambda n: str(n.channel) if n.channel else "—"),
         ListColumn("Security", lambda n: n.security),
@@ -355,6 +358,7 @@ def _run_wifi_monitor(engine, caps) -> None:
         return {
             "SSID":            t.ssid,
             "BSSID":           t.bssid or "unknown",
+            "Vendor":          t.vendor or "unknown",
             "Channel":         t.channel or "unknown",
             "Frequency (GHz)": t.frequency or "unknown",
             "Signal (dBm)":    t.signal,
@@ -392,6 +396,7 @@ def _run_bluetooth_monitor(engine, caps) -> None:
     columns = [
         ListColumn("Name",    lambda d: d.name),
         ListColumn("Address", lambda d: d.address),
+        ListColumn("Vendor",  lambda d: d.vendor or "—"),
         ListColumn("Type",    lambda d: "BLE" if d.le else "Classic"),
         ListColumn("Seen",    lambda d: str(d.seen_count)),
     ]
@@ -406,6 +411,7 @@ def _run_bluetooth_monitor(engine, caps) -> None:
         return {
             "Name":       t.name,
             "Address":    t.address,
+            "Vendor":     t.vendor or "unknown",
             "Type":       "BLE" if t.le else "Classic",
             "First seen": time.strftime("%H:%M:%S", time.localtime(t.first_seen)),
             "Last seen":  time.strftime("%H:%M:%S", time.localtime(t.last_seen)),

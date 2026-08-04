@@ -12,21 +12,18 @@ no exploitation.
 from __future__ import annotations
 
 import socket
-import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.types import Finding, Severity
+from core.shell import run as _shell_run
+from core.net_vendor import classify_mac
 
 
 def _run(cmd: List[str], timeout: int = 5) -> Tuple[int, str]:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.returncode, r.stdout
-    except Exception as e:
-        return -1, str(e)
+    r = _shell_run(cmd, timeout)
+    return r.returncode, (r.stderr if r.returncode == -1 and not r.stdout else r.stdout)
 
 
 _COMMON_PORTS: Dict[int, str] = {
@@ -42,6 +39,7 @@ class TrackedHost:
     ip:         str
     mac:        str   = ""
     state:      str   = ""
+    vendor:     str   = ""   # from core.net_vendor -- "" until a MAC is known
     first_seen: float = 0.0
     last_seen:  float = 0.0
     seen_count: int   = 1
@@ -49,6 +47,7 @@ class TrackedHost:
     def update(self, mac: str, state: str, now: float) -> None:
         if mac:
             self.mac = mac
+            self.vendor = classify_mac(mac).label
         self.state = state or self.state
         self.last_seen = now
         self.seen_count += 1
@@ -81,11 +80,13 @@ def merge_scan(
         ip = h.get("ip", "")
         if not ip:
             continue
+        mac = h.get("mac", "")
         if ip in registry:
-            registry[ip].update(h.get("mac", ""), h.get("state", ""), now)
+            registry[ip].update(mac, h.get("state", ""), now)
         else:
             registry[ip] = TrackedHost(
-                ip=ip, mac=h.get("mac", ""), state=h.get("state", ""),
+                ip=ip, mac=mac, state=h.get("state", ""),
+                vendor=classify_mac(mac).label if mac else "",
                 first_seen=now, last_seen=now,
             )
     return registry

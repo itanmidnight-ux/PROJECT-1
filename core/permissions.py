@@ -20,14 +20,11 @@ which modules to offer.
 from __future__ import annotations
 
 import os
-import shutil
 import subprocess
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-
-def _tool_exists(name: str) -> bool:
-    return shutil.which(name) is not None
+from .shell import tool_exists as _tool_exists
 
 
 def _probe(cmd: List[str], timeout: float) -> Optional[int]:

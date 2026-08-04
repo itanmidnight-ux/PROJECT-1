@@ -10,7 +10,6 @@ to a single tracked network -- no connection attempt is ever made).
 """
 from __future__ import annotations
 
-import subprocess
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -18,16 +17,13 @@ from typing import Any, Dict, List, Optional
 from core.discovery import detect_monitor_mode_support
 from core.permissions import PrivilegeStatus
 from core.types import Finding
+from core.shell import run as _shell_run
 from modules.wifi.scanner import WiFiNetwork, WiFiScanner
 
 
 def _run(cmd: List[str], timeout: int = 10) -> tuple[int, str]:
-    try:
-        r = subprocess.run(cmd, capture_output=True, text=True,
-                           timeout=timeout, errors="replace")
-        return r.returncode, r.stdout + r.stderr
-    except Exception as e:
-        return -1, str(e)
+    r = _shell_run(cmd, timeout)
+    return r.returncode, (r.stderr if r.returncode == -1 and not r.stdout else r.combined)
 
 
 @dataclass
@@ -41,6 +37,7 @@ class TrackedNetwork:
     security:   str
     first_seen: float
     last_seen:  float
+    vendor:     str = ""   # copied from WiFiNetwork.vendor -- see core.net_vendor
     seen_count: int = 1
 
     def update(self, net: WiFiNetwork, now: float) -> None:
@@ -48,6 +45,7 @@ class TrackedNetwork:
         self.channel   = net.channel or self.channel
         self.frequency = net.frequency or self.frequency
         self.security  = net.security or self.security
+        self.vendor    = net.vendor or self.vendor
         self.last_seen = now
         self.seen_count += 1
 
@@ -69,7 +67,7 @@ def merge_scan(
             registry[key] = TrackedNetwork(
                 key=key, ssid=net.ssid or "<hidden>", bssid=net.bssid,
                 channel=net.channel, frequency=net.frequency,
-                signal=net.signal, security=net.security,
+                signal=net.signal, security=net.security, vendor=net.vendor,
                 first_seen=now, last_seen=now,
             )
     return registry
