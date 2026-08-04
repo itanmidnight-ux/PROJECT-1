@@ -32,7 +32,12 @@ from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeEl
 from rich.table import Table
 from rich.text import Text
 
-console = Console()
+# emoji=False: Rich's default `:shortcode:` emoji substitution would
+# otherwise silently corrupt any MAC/BSSID/identifier containing a hex
+# byte pair that collides with a real emoji shortcode (":ab:" -> "🆎",
+# ":cd:", ":ok:", ":up:", etc. all exist) -- these live views render
+# security-relevant identifiers that must appear byte-for-byte.
+console = Console(emoji=False)
 
 
 def _read_line_nonblocking(timeout: float) -> Optional[str]:

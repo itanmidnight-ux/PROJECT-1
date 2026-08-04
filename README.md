@@ -24,8 +24,13 @@ cyberscope/
 ├── core/
 │   ├── engine.py             # orchestrator: discovery → modules → AI → DB → reports
 │   ├── discovery.py           # hardware/capability detection
-│   ├── config.py               # config.yaml loading with defaults
-│   └── types.py                 # Finding, ModuleResult, Severity, CapabilityInfo
+│   ├── permissions.py          # root/sudo/su privilege probing
+│   ├── shell.py                 # single shared subprocess/tool-exists layer
+│   ├── event_bus.py              # in-process pub/sub (asset observations, ...)
+│   ├── asset_manager.py           # persisted Asset knowledge base
+│   ├── net_vendor.py               # MAC classification + OUI vendor lookup
+│   ├── config.py                    # config.yaml loading with defaults
+│   └── types.py                      # Finding, ModuleResult, Severity, CapabilityInfo
 ├── modules/
 │   ├── telecom/                # SS7 / SIGTRAN — the original framework
 │   │   ├── ss7_engine.py
@@ -106,6 +111,41 @@ Every run writes the complete discovery + privilege result to
 reasons, monitor-mode support, and the privilege probe. This is the
 device's capability record: what CyberScope found, and why anything
 unavailable is unavailable.
+
+## Asset Intelligence (`core/asset_manager.py`, `core/event_bus.py`)
+
+Every identifiable thing a scan or live monitor observes — a WiFi AP's
+BSSID, a Bluetooth device's address, a LAN host's IP — becomes a
+persisted **Asset** in a dedicated `assets` table, surviving across
+sessions: type, vendor, interfaces, observed services, a risk level that
+only ever escalates (a quieter follow-up scan never erases a prior
+CRITICAL finding), first/last seen, and which sessions observed it.
+Menu option 7, "Base de datos de activos", lists everything known.
+
+Publishers (the WiFi/Bluetooth static scanners via `core/engine.py`, and
+the WiFi/Bluetooth/Network live monitors via `main.py`) don't call the
+asset manager directly — they publish an `ASSET_OBSERVED` event on
+`core/event_bus.py`, a small thread-safe pub/sub bus, and the single
+`AssetManager` instance `CyberScopeEngine` owns is subscribed to it. This
+keeps the modules that *find* things decoupled from the thing that
+*remembers* them.
+
+Vendor identification (`core/net_vendor.py`) is deliberately conservative
+about what it claims: `classify_mac()` derives locally-administered
+("randomized"/virtual) status directly from the IEEE 802 MAC bit layout —
+always correct, no lookup table involved, and it's exactly what modern
+MAC-randomization on phones and BLE produces. Actual vendor *names* only
+ever come from a small, high-confidence seed table (VMware, VirtualBox,
+QEMU/KVM, Xen — each platform's own well-documented default OUI prefix);
+an unmatched MAC is reported as "Unknown vendor", never guessed.
+
+## AI explainability (`ai/engine.py::RiskEngine.explain`)
+
+Beyond the aggregate risk score, every finding can be turned into a
+structured, plain-language explanation via `RiskEngine.explain(finding)`:
+**what** was observed, **why** it matters, the concrete **risk** if left
+unaddressed, and how to **fix** it — covering all finding types the
+platform's modules actually produce, not a generic template.
 
 ## Live monitor mode (every module with something to list)
 
@@ -222,9 +262,10 @@ not committed to version control.
 
 ## Database
 
-Audit sessions, findings, and per-module results are persisted to SQLite
-(`database/cyberscope.db`) so `python3 main.py` → option 8 can show audit
-history and cumulative statistics across runs.
+Audit sessions, findings, per-module results, and the asset knowledge
+base are persisted to SQLite (`database/cyberscope.db`) so
+`python3 main.py` → option 9 can show audit history and cumulative
+statistics, and option 7 can show every known asset, across runs.
 
 ## Testing
 

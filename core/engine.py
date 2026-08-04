@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 from core.config import load_config
 from core.discovery import SystemCapabilities, discover_all, save_capabilities_report
 from core.types import ModuleResult, ModuleStatus
+from core.event_bus import ASSET_OBSERVED, Event, EventBus
 
 log = logging.getLogger("cyberscope.engine")
 
@@ -56,10 +57,13 @@ class CyberScopeEngine:
         from database.db import CyberScopeDB
         from ai.engine   import RiskEngine
         from reports.generator import ReportGenerator
+        from core.asset_manager import AssetManager
 
         self.db       = CyberScopeDB(self.cfg.get("database", {}).get("path", "database/cyberscope.db"))
         self.ai       = RiskEngine()
         self.reporter = ReportGenerator(self.cfg.get("reports", {}).get("output_dir", "reports"))
+        self.events   = EventBus()
+        self.assets   = AssetManager(self.db, self.events)
 
         # Create the session row up front — module_results has a FK on
         # sessions(id) and modules may run before analyze() finalizes it.
@@ -103,9 +107,55 @@ class CyberScopeEngine:
             self.session_id, module, result.status.value,
             result.duration_ms, result.raw_data,
         )
+        self._publish_assets(module, result)
         log.info(f"Module {module}: {result.finding_count} findings "
                  f"({result.duration_ms:.0f}ms)")
         return result
+
+    def _publish_assets(self, module: str, result: ModuleResult) -> None:
+        """
+        Turn a module's raw scan data into Asset observations on the
+        event bus. Only wifi/bluetooth static scans currently carry
+        other-device identity data -- the network module's static scan
+        only describes this host's own interfaces, not other hosts on
+        the LAN; those are only visible via the live network monitor,
+        which publishes its own observations directly (see main.py).
+        """
+        m = module.lower()
+
+        if m == "wifi":
+            from modules.wifi.scanner import WiFiNetwork
+            for net in result.raw_data.get("networks", []):
+                bssid = net.get("bssid")
+                if not bssid:
+                    continue
+                self.events.publish(Event(
+                    type=ASSET_OBSERVED,
+                    payload={
+                        "asset_type": "wifi_ap", "identifier": bssid,
+                        "vendor": net.get("vendor", ""), "interfaces": ["wifi"],
+                        "risk": WiFiNetwork(**net).risk_level,
+                        "session_id": self.session_id,
+                    },
+                    source="wifi_scanner",
+                ))
+
+        elif m == "bluetooth":
+            for dev in result.raw_data.get("devices", []):
+                address = dev.get("address")
+                if not address:
+                    continue
+                unnamed = dev.get("name") in ("", "Unknown", "Unknown BLE", None)
+                self.events.publish(Event(
+                    type=ASSET_OBSERVED,
+                    payload={
+                        "asset_type": "bluetooth_device", "identifier": address,
+                        "vendor": dev.get("vendor", ""), "interfaces": ["bluetooth"],
+                        "risk": "LOW" if unnamed else "INFO",
+                        "session_id": self.session_id,
+                    },
+                    source="bluetooth_scanner",
+                ))
 
     def _dispatch_module(self, module: str) -> ModuleResult:
         m = module.lower()

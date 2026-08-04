@@ -53,9 +53,24 @@ class CyberScopeDB:
         FOREIGN KEY(session_id) REFERENCES sessions(id)
     );
 
+    CREATE TABLE IF NOT EXISTS assets (
+        id                TEXT PRIMARY KEY,
+        type              TEXT NOT NULL,
+        identifier        TEXT NOT NULL,
+        vendor            TEXT,
+        interfaces        TEXT,
+        observed_services TEXT,
+        risk              TEXT,
+        first_seen        TEXT NOT NULL,
+        last_seen         TEXT NOT NULL,
+        seen_count        INTEGER DEFAULT 1,
+        sessions          TEXT
+    );
+
     CREATE INDEX IF NOT EXISTS idx_findings_session ON findings(session_id);
     CREATE INDEX IF NOT EXISTS idx_findings_severity ON findings(severity);
     CREATE INDEX IF NOT EXISTS idx_sessions_date ON sessions(started_at);
+    CREATE INDEX IF NOT EXISTS idx_assets_type ON assets(type);
     """
 
     def __init__(self, db_path: str = "database/cyberscope.db") -> None:
@@ -191,12 +206,66 @@ class CyberScopeDB:
             ),
         )
 
+    # ── Assets ────────────────────────────────────────────────────────────
+
+    def upsert_asset(self, asset: Dict[str, Any]) -> None:
+        """Insert or fully replace a single asset row. Callers (typically
+        core/asset_manager.py) are responsible for merging fields against
+        any prior row -- this is a plain upsert, not a merge."""
+        self._db().execute(
+            """INSERT OR REPLACE INTO assets
+               (id, type, identifier, vendor, interfaces, observed_services,
+                risk, first_seen, last_seen, seen_count, sessions)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                asset["id"], asset["type"], asset["identifier"],
+                asset.get("vendor", ""),
+                json.dumps(asset.get("interfaces", [])),
+                json.dumps(asset.get("observed_services", [])),
+                asset.get("risk", ""),
+                asset["first_seen"], asset["last_seen"],
+                asset.get("seen_count", 1),
+                json.dumps(asset.get("sessions", [])),
+            ),
+        )
+
+    def get_asset(self, asset_id: str) -> Optional[Dict[str, Any]]:
+        r = self._db().execute(
+            "SELECT * FROM assets WHERE id=?", (asset_id,)
+        ).fetchone()
+        return self._asset_row_to_dict(r) if r else None
+
+    def get_assets(
+        self,
+        asset_type: Optional[str] = None,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        if asset_type:
+            rows = self._db().execute(
+                "SELECT * FROM assets WHERE type=? ORDER BY last_seen DESC LIMIT ?",
+                (asset_type, limit),
+            ).fetchall()
+        else:
+            rows = self._db().execute(
+                "SELECT * FROM assets ORDER BY last_seen DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [self._asset_row_to_dict(r) for r in rows]
+
+    @staticmethod
+    def _asset_row_to_dict(row: sqlite3.Row) -> Dict[str, Any]:
+        d = dict(row)
+        d["interfaces"]        = json.loads(d.get("interfaces") or "[]")
+        d["observed_services"] = json.loads(d.get("observed_services") or "[]")
+        d["sessions"]          = json.loads(d.get("sessions") or "[]")
+        return d
+
     # ── Statistics ─────────────────────────────────────────────────────────
 
     def get_stats(self) -> Dict[str, Any]:
         db = self._db()
         total_sessions = db.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         total_findings = db.execute("SELECT COUNT(*) FROM findings").fetchone()[0]
+        total_assets   = db.execute("SELECT COUNT(*) FROM assets").fetchone()[0]
         by_sev = dict(db.execute(
             "SELECT severity, COUNT(*) FROM findings GROUP BY severity"
         ).fetchall())
@@ -206,6 +275,7 @@ class CyberScopeDB:
         return {
             "total_sessions": total_sessions,
             "total_findings": total_findings,
+            "total_assets":   total_assets,
             "by_severity":    by_sev,
             "latest_scan":    latest[0] if latest else None,
         }

@@ -18,7 +18,7 @@ import sys
 import os
 import time
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 # Ensure project root is in path (critical for Termux / non-CWD execution)
 _ROOT = Path(__file__).parent.resolve()
@@ -33,7 +33,12 @@ try:
     from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn
     from rich.prompt   import Prompt, Confirm
     from rich.text     import Text
-    _CON = Console()
+    # emoji=False: Rich's default `:shortcode:` emoji substitution would
+    # otherwise silently corrupt any MAC/BSSID containing a hex byte pair
+    # that collides with a real shortcode (":ab:" -> "🆎", ":cd:", ":ok:",
+    # ":up:", etc. are all valid emoji names) -- security-relevant
+    # identifiers must render byte-for-byte, not get "autocorrected".
+    _CON = Console(emoji=False)
     _RICH = True
 except ImportError:
     _CON = None  # type: ignore
@@ -120,15 +125,16 @@ def _show_capabilities(caps) -> None:
 # ── Menu ──────────────────────────────────────────────────────────────────────
 
 _MENU_ITEMS = [
-    ("1", "auto",       "Auditoría automática completa",                       None),
-    ("2", "network",    "Red local (análisis + monitoreo en vivo)",            "network"),
-    ("3", "wifi",       "WiFi (análisis + monitoreo en vivo)",                 "wifi"),
-    ("4", "bluetooth",  "Bluetooth (análisis + monitoreo en vivo)",            "bluetooth"),
-    ("5", "device",     "Información del dispositivo",                        "device"),
-    ("6", "telecom",    "Telecom / SS7 (análisis + monitoreo en vivo)",       "telecom"),
-    ("7", "report",     "Generar reporte (JSON / HTML / Markdown)",           None),
-    ("8", "history",    "Historial de auditorías",                           None),
-    ("9", "quit",       "Salir",                                             None),
+    ("1",  "auto",       "Auditoría automática completa",                       None),
+    ("2",  "network",    "Red local (análisis + monitoreo en vivo)",            "network"),
+    ("3",  "wifi",       "WiFi (análisis + monitoreo en vivo)",                 "wifi"),
+    ("4",  "bluetooth",  "Bluetooth (análisis + monitoreo en vivo)",            "bluetooth"),
+    ("5",  "device",     "Información del dispositivo",                        "device"),
+    ("6",  "telecom",    "Telecom / SS7 (análisis + monitoreo en vivo)",       "telecom"),
+    ("7",  "assets",     "Base de datos de activos",                          None),
+    ("8",  "report",     "Generar reporte (JSON / HTML / Markdown)",           None),
+    ("9",  "history",    "Historial de auditorías",                           None),
+    ("10", "quit",       "Salir",                                             None),
 ]
 
 
@@ -195,15 +201,41 @@ def _show_result(result) -> None:
         print()
 
 
+def _wifi_risk_from_security(security: str) -> str:
+    """Reuse WiFiNetwork.risk_level (the single source of truth for the
+    security -> risk mapping) for a bare security string, e.g. from a
+    live-tracked network that only carries the string, not a full
+    WiFiNetwork instance."""
+    from modules.wifi.scanner import WiFiNetwork
+    return WiFiNetwork(ssid="", security=security).risk_level
+
+
 def _run_network_monitor(engine, caps) -> None:
     from modules.network.monitor import NetworkMonitor
     from ui.live_view import ListColumn, activation_progress, run_live_detail, run_live_list
 
     mon = NetworkMonitor(engine.cfg)
 
+    def poll_and_publish():
+        hosts = mon.poll()
+        for h in hosts:
+            engine.assets.observe(
+                "network_host", h.ip, vendor=h.vendor, interfaces=["ethernet"],
+                risk="INFO", session_id=engine.session_id,
+            )
+        return hosts
+
+    def probe_and_score(host):
+        findings = mon.probe(host.ip)
+        if findings:
+            worst = max(findings, key=lambda f: f.severity.score).severity.value
+            engine.assets.observe("network_host", host.ip, risk=worst,
+                                   session_id=engine.session_id)
+        return findings
+
     activation_progress("Network Monitor", [
         ("Verificando privilegios",              lambda: caps.privileges.to_dict()),
-        ("Leyendo tabla de vecinos (ARP/NDP)",    mon.poll),
+        ("Leyendo tabla de vecinos (ARP/NDP)",    poll_and_publish),
     ])
 
     def subtitle() -> str:
@@ -217,12 +249,12 @@ def _run_network_monitor(engine, caps) -> None:
         ListColumn("Visto",  lambda h: str(h.seen_count)),
     ]
 
-    selected = run_live_list("Network Monitor — Hosts en vivo", subtitle, mon.poll, columns)
+    selected = run_live_list("Network Monitor — Hosts en vivo", subtitle, poll_and_publish, columns)
     if selected is None:
         return
 
     def detail(host) -> dict:
-        mon.poll()
+        poll_and_publish()
         t = mon.registry.get(host.ip, host)
         return {
             "IP":            t.ip,
@@ -236,7 +268,7 @@ def _run_network_monitor(engine, caps) -> None:
 
     run_live_detail(
         f"Host — {selected.ip}", selected, detail,
-        probe_fn=lambda h: mon.probe(h.ip),
+        probe_fn=probe_and_score,
     )
 
 
@@ -329,10 +361,20 @@ def _run_wifi_monitor(engine, caps) -> None:
         _print("[red]No WiFi interface available for monitoring.[/red]")
         return
 
+    def poll_and_publish():
+        nets = mon.poll()
+        for n in nets:
+            engine.assets.observe(
+                "wifi_ap", n.bssid or f"ssid:{n.ssid}", vendor=n.vendor,
+                interfaces=["wifi"], risk=_wifi_risk_from_security(n.security),
+                session_id=engine.session_id,
+            )
+        return nets
+
     activation_progress("WiFi Monitor", [
         ("Verificando privilegios",          lambda: caps.privileges.to_dict()),
         ("Verificando soporte de modo monitor", lambda: caps.wifi.details.get("monitor_mode")),
-        ("Iniciando motor de detección",     mon.poll),
+        ("Iniciando motor de detección",     poll_and_publish),
     ])
 
     def subtitle() -> str:
@@ -348,12 +390,12 @@ def _run_wifi_monitor(engine, caps) -> None:
         ListColumn("Security", lambda n: n.security),
     ]
 
-    selected = run_live_list("WiFi Monitor — Live Networks", subtitle, mon.poll, columns)
+    selected = run_live_list("WiFi Monitor — Live Networks", subtitle, poll_and_publish, columns)
     if selected is None:
         return
 
     def detail(net) -> dict:
-        mon.poll()
+        poll_and_publish()
         t = mon.registry.get(net.key, net)
         return {
             "SSID":            t.ssid,
@@ -383,10 +425,21 @@ def _run_bluetooth_monitor(engine, caps) -> None:
         _print("[red]No Bluetooth adapter available for monitoring.[/red]")
         return
 
+    def poll_and_publish():
+        devs = mon.poll()
+        for d in devs:
+            unnamed = d.name in ("", "Unknown", "Unknown BLE")
+            engine.assets.observe(
+                "bluetooth_device", d.address, vendor=d.vendor,
+                interfaces=["bluetooth"], risk="LOW" if unnamed else "INFO",
+                session_id=engine.session_id,
+            )
+        return devs
+
     activation_progress("Bluetooth Monitor", [
         ("Verificando privilegios",      lambda: caps.privileges.to_dict()),
         ("Verificando adaptador",        lambda: mon.scanner.adapters[0].name),
-        ("Iniciando motor de detección", mon.poll),
+        ("Iniciando motor de detección", poll_and_publish),
     ])
 
     def subtitle() -> str:
@@ -401,12 +454,12 @@ def _run_bluetooth_monitor(engine, caps) -> None:
         ListColumn("Seen",    lambda d: str(d.seen_count)),
     ]
 
-    selected = run_live_list("Bluetooth Monitor — Live Devices", subtitle, mon.poll, columns)
+    selected = run_live_list("Bluetooth Monitor — Live Devices", subtitle, poll_and_publish, columns)
     if selected is None:
         return
 
     def detail(dev) -> dict:
-        mon.poll()
+        poll_and_publish()
         t = mon.registry.get(dev.address, dev)
         return {
             "Name":       t.name,
@@ -483,6 +536,39 @@ def _generate_reports(engine, ai_report) -> None:
         _print(f"  [cyan]{fmt.upper()}[/cyan]: {path}")
 
 
+_RISK_COLORS = {"CRITICAL": "red", "HIGH": "orange3", "MEDIUM": "yellow", "LOW": "green", "INFO": "dim"}
+
+
+def _show_assets(engine) -> None:
+    assets = engine.assets.get_assets()
+    if not assets:
+        _print("[dim]No assets recorded yet. Run a network/WiFi/Bluetooth scan or monitor first.[/dim]")
+        return
+
+    if _CON:
+        t = Table(title=f"Asset Database — {len(assets)} known", style="cyan")
+        t.add_column("Type"); t.add_column("Identifier"); t.add_column("Vendor")
+        t.add_column("Risk"); t.add_column("Seen"); t.add_column("Last seen")
+        for a in assets:
+            color = _RISK_COLORS.get(a.risk, "white")
+            t.add_row(
+                a.type, a.identifier, a.vendor or "—",
+                f"[{color}]{a.risk}[/{color}]",
+                str(a.seen_count), a.last_seen[:19].replace("T", " "),
+            )
+        _CON.print(t)
+    else:
+        print(f"\n  Asset Database — {len(assets)} known")
+        for a in assets:
+            print(f"  [{a.risk}] {a.type} {a.identifier} ({a.vendor or 'unknown vendor'})"
+                  f" — seen {a.seen_count}x, last {a.last_seen[:19]}")
+
+    by_type: Dict[str, int] = {}
+    for a in assets:
+        by_type[a.type] = by_type.get(a.type, 0) + 1
+    _print("  " + "  ·  ".join(f"{k}: {v}" for k, v in sorted(by_type.items())))
+
+
 def _show_history(engine) -> None:
     sessions = engine.db.get_sessions(limit=10)
     if not sessions:
@@ -546,16 +632,19 @@ def interactive_mode() -> None:
                 handler(engine, caps)
 
         elif choice == "7":
+            _show_assets(engine)
+
+        elif choice == "8":
             if not engine.results:
                 _print("[yellow]No scan results yet. Run a module first.[/yellow]")
             else:
                 ai_report = engine.analyze()
                 _generate_reports(engine, ai_report)
 
-        elif choice == "8":
+        elif choice == "9":
             _show_history(engine)
 
-        elif choice in ("9","q","quit","exit"):
+        elif choice in ("10","q","quit","exit"):
             _print("[cyan]Goodbye.[/cyan]")
             sys.exit(0)
 

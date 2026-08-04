@@ -58,6 +58,16 @@ class WiFiNetwork:
         if "OPEN" in s or not s or s == "UNKNOWN": return "OPEN"
         return "UNKNOWN"
 
+    @property
+    def risk_level(self) -> str:
+        """Severity-string equivalent of security_level -- the single
+        source of truth other layers (asset manager, live monitor UI)
+        map a network's security posture to a risk label from."""
+        return {
+            "BROKEN": "CRITICAL", "OPEN": "HIGH", "WEAK": "MEDIUM",
+            "GOOD": "LOW", "STRONG": "INFO", "UNKNOWN": "INFO",
+        }[self.security_level]
+
 
 # ── Scanner ───────────────────────────────────────────────────────────────────
 
