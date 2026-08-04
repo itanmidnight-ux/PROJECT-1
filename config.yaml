@@ -1,0 +1,37 @@
+# CyberScope AI Security Platform — Configuration
+
+platform:
+  name: "CyberScope AI Security Platform"
+  version: "1.0.0"
+
+logging:
+  level: INFO
+  file: logs/cyberscope.log
+
+database:
+  path: database/cyberscope.db
+
+reports:
+  output_dir: reports
+  formats: [json, html, markdown]
+
+wifi:
+  scan_timeout: 10
+  passive_only: true
+
+bluetooth:
+  scan_timeout: 10
+  max_devices: 50
+
+network:
+  port_scan: false
+  interface: auto
+
+telecom:
+  mode: laboratory
+  sri_threshold: 10
+  isd_threshold: 3
+
+ai:
+  risk_threshold_high: 65
+  risk_threshold_critical: 85

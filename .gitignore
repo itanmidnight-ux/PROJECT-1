@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.venv/
+logs/*.log
+database/*.db
+reports/
+*.json
+*.html
+*.md
+!README.md
+!config.yaml
+.pytest_cache/
+cyberscope
