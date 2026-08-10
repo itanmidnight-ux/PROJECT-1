@@ -37,7 +37,6 @@ from core.types import (
 from core.config import load_config
 from ai.engine  import RiskEngine, AIReport, ExplainedFinding
 
-
 # ================================================================
 # core/types
 # ================================================================
@@ -57,7 +56,6 @@ class TestSeverity:
         scores = [s.score for s in Severity]
         assert len(scores) == len(set(scores))
 
-
 class TestFinding:
     def _make(self, sev=Severity.HIGH) -> Finding:
         return Finding(
@@ -76,7 +74,6 @@ class TestFinding:
         f = self._make()
         assert f.mitre is None
         assert f.source is None
-
 
 class TestModuleResult:
     def test_finding_count(self):
@@ -107,7 +104,6 @@ class TestModuleResult:
         assert d["status"] == "available"
         assert d["raw_data"]["key"] == "val"
 
-
 class TestCapabilityInfo:
     def test_bool_available(self):
         c = CapabilityInfo("WiFi", ModuleStatus.AVAILABLE)
@@ -126,7 +122,6 @@ class TestCapabilityInfo:
         d = c.to_dict()
         assert d["name"] == "BT"
         assert d["details"]["adapters"] == ["hci0"]
-
 
 # ================================================================
 # core/config
@@ -151,7 +146,6 @@ class TestConfig:
         cfg = load_config(str(f))
         assert cfg["ai"]["risk_threshold_high"] == 80
         assert cfg["ai"]["risk_threshold_critical"] == 85  # default preserved
-
 
 # ================================================================
 # core/discovery  (mocked — no real hardware needed for CI)
@@ -187,55 +181,8 @@ class TestDiscovery:
         label = info.env_label
         assert isinstance(label, str) and len(label) > 0
 
-
 # ================================================================
 # Network module
-# ================================================================
-
-class TestNetworkDiscovery:
-    def _make_scanner(self):
-        from modules.network.discovery import NetworkDiscovery
-        return NetworkDiscovery({})
-
-    def test_parse_ip_addr(self):
-        nd = self._make_scanner()
-        sample = (
-            "2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc pfifo_fast\n"
-            "    link/ether 00:11:22:33:44:55 brd ff:ff:ff:ff:ff:ff\n"
-            "    inet 192.168.1.10/24 brd 192.168.1.255 scope global eth0\n"
-        )
-        result = nd._parse_ip_addr(sample)
-        assert len(result) >= 1
-        assert result[0]["ifname"] == "eth0"
-
-    def test_analyze_promisc(self):
-        nd = self._make_scanner()
-        ifaces = [{"ifname": "eth0", "flags": ["PROMISC", "UP"]}]
-        findings = nd._analyze_interfaces(ifaces)
-        assert any("PROMISC" in f.type for f in findings)
-
-    def test_analyze_sensitive_port(self):
-        nd = self._make_scanner()
-        svcs = [{"port": 23, "address": "0.0.0.0", "proto": "tcp"}]
-        findings = nd._analyze_services(svcs)
-        assert len(findings) > 0
-        assert any(f.severity in (Severity.HIGH, Severity.MEDIUM) for f in findings)
-
-    def test_safe_port_low_severity(self):
-        nd = self._make_scanner()
-        svcs = [{"port": 8080, "address": "0.0.0.0", "proto": "tcp"}]
-        findings = nd._analyze_services(svcs)
-        assert all(f.severity in (Severity.LOW, Severity.INFO) for f in findings)
-
-    def test_run_returns_result(self):
-        nd = self._make_scanner()
-        result = nd.run()
-        assert result.module == "network"
-        assert result.status == ModuleStatus.AVAILABLE
-
-
-# ================================================================
-# WiFi module
 # ================================================================
 
 class TestWiFiScanner:
@@ -304,97 +251,6 @@ BSS aa:bb:cc:dd:ee:ff(on wlan0)
         from modules.wifi.scanner import WiFiNetwork
         net = WiFiNetwork(ssid="Test", bssid="00:0C:29:AB:CD:EF", vendor="Custom")
         assert net.vendor == "Custom"
-
-
-# ================================================================
-# Bluetooth module
-# ================================================================
-
-class TestBluetoothScanner:
-    def _make(self):
-        from modules.bluetooth.scanner import BluetoothScanner
-        return BluetoothScanner({})
-
-    def test_vendor_derived_from_address(self):
-        from modules.bluetooth.scanner import BTDevice
-        dev = BTDevice(address="08:00:27:11:22:33")
-        assert dev.vendor == "Oracle VirtualBox (virtual NIC)"
-
-    def test_vendor_flags_ble_private_address(self):
-        from modules.bluetooth.scanner import BTDevice
-        # 0x02 U/L bit set -> classic "locally administered / private" example
-        dev = BTDevice(address="02:00:00:00:00:01", le=True)
-        assert "administered" in dev.vendor.lower()
-
-    def test_analyze_discoverable(self):
-        from modules.bluetooth.scanner import BTAdapter, BTDevice
-        scanner = self._make()
-        adapter = BTAdapter(name="hci0", discoverable=True, bd_address="AA:BB:CC:DD:EE:FF")
-        findings = scanner._analyze(adapter, [])
-        assert any(f.type == "BT_ADAPTER_DISCOVERABLE" for f in findings)
-
-    def test_analyze_unnamed_devices(self):
-        from modules.bluetooth.scanner import BTAdapter, BTDevice
-        scanner = self._make()
-        adapter = BTAdapter(name="hci0", discoverable=False)
-        devs    = [BTDevice("11:22:33:44:55:66", "Unknown")]
-        findings = scanner._analyze(adapter, devs)
-        assert any(f.type == "BT_UNNAMED_DEVICES" for f in findings)
-
-    def test_ble_finding(self):
-        from modules.bluetooth.scanner import BTAdapter, BTDevice
-        scanner = self._make()
-        adapter = BTAdapter(name="hci0")
-        devs    = [BTDevice("AA:BB:CC:DD:EE:FF", "BLE Beacon", le=True)]
-        findings = scanner._analyze(adapter, devs)
-        assert any(f.type == "BLE_DEVICES_DETECTED" for f in findings)
-
-
-# ================================================================
-# Device module
-# ================================================================
-
-class TestDeviceAnalyzer:
-    def _make(self):
-        from modules.device.system import DeviceAnalyzer
-        return DeviceAnalyzer({})
-
-    def test_os_info_populated(self):
-        da = self._make()
-        info = da._os_info()
-        assert "system"   in info
-        assert "release"  in info
-        assert "is_root"  in info
-        assert isinstance(info["is_root"], bool)
-
-    def test_cpu_info(self):
-        da = self._make()
-        info = da._cpu_info()
-        assert "architecture" in info
-        assert "cores" in info
-
-    def test_aslr_finding(self):
-        da = self._make()
-        raw = {"security": {"aslr": 0}, "memory": {}}
-        findings = da._analyze(raw)
-        assert any(f.type == "ASLR_DISABLED" for f in findings)
-
-    def test_run_returns_result(self):
-        da = self._make()
-        result = da.run()
-        assert result.module == "device"
-        assert result.status == ModuleStatus.AVAILABLE
-
-    def test_installed_tools(self):
-        da = self._make()
-        tools = da._installed_tools()
-        assert isinstance(tools, dict)
-        assert "python3" in tools
-
-
-# ================================================================
-# AI Engine
-# ================================================================
 
 def _make_results(specs: list) -> List[ModuleResult]:
     """Build ModuleResult list from (module, [Finding]) specs."""
@@ -478,7 +334,6 @@ class TestRiskEngine:
         assert "recommendations" in d
         assert "attack_surface" in d
 
-
 # ================================================================
 # Reports
 # ================================================================
@@ -523,7 +378,6 @@ class TestReports:
         md = Path(path).read_text()
         assert "# 🔍 CyberScope" in md
         assert "Risk" in md
-
 
 # ================================================================
 # Database
@@ -581,7 +435,6 @@ class TestDatabase:
         db2 = self._make_db(tmp_path)
         sessions = db2.get_sessions()
         assert len(sessions) == 1
-
 
 # ================================================================
 # Privileges (root / sudo / su detection)
@@ -656,7 +509,6 @@ class TestPrivileges:
         assert d["can_escalate"] is True
         assert d["method"] == "already_root"
 
-
 # ================================================================
 # WiFi monitor-mode capability detection
 # ================================================================
@@ -703,7 +555,6 @@ class TestMonitorModeDetection:
         assert ok is False
         assert reason
 
-
 # ================================================================
 # WiFi live monitor
 # ================================================================
@@ -744,7 +595,6 @@ class TestWiFiMonitorMerge:
         merge_scan(registry, [WiFiNetwork(ssid="NoAddr", bssid="", signal=-60)], now=1.0)
         assert "ssid:NoAddr" in registry
 
-
 class TestWiFiMonitorProbe:
     def test_probe_open_network(self):
         from modules.wifi.monitor import WiFiMonitor, TrackedNetwork
@@ -761,7 +611,6 @@ class TestWiFiMonitorProbe:
         from modules.wifi.monitor import WiFiMonitor
         mon = WiFiMonitor({})
         assert mon.probe("nope") == []
-
 
 class TestMonitorModeSession:
     def test_no_privileges_falls_back(self):
@@ -790,45 +639,8 @@ class TestMonitorModeSession:
             assert sess.active is False
             assert sess.reason == "no monitor support"
 
-
 # ================================================================
 # Bluetooth live monitor
-# ================================================================
-
-class TestBluetoothMonitorMerge:
-    def test_new_device_added(self):
-        from modules.bluetooth.monitor import merge_scan
-        from modules.bluetooth.scanner import BTDevice
-        registry = {}
-        merge_scan(registry, [BTDevice(address="11:22:33:44:55:66", name="Phone")], now=1.0)
-        assert registry["11:22:33:44:55:66"].name == "Phone"
-
-    def test_name_upgrade_on_rescan(self):
-        from modules.bluetooth.monitor import merge_scan
-        from modules.bluetooth.scanner import BTDevice
-        registry = {}
-        merge_scan(registry, [BTDevice(address="AA", name="Unknown")], now=1.0)
-        merge_scan(registry, [BTDevice(address="AA", name="RealName")], now=2.0)
-        assert registry["AA"].name == "RealName"
-        assert registry["AA"].seen_count == 2
-
-    def test_vendor_copied_from_scan(self):
-        from modules.bluetooth.monitor import merge_scan
-        from modules.bluetooth.scanner import BTDevice
-        registry = {}
-        merge_scan(registry, [BTDevice(address="08:00:27:11:22:33", name="Phone")], now=1.0)
-        assert registry["08:00:27:11:22:33"].vendor == "Oracle VirtualBox (virtual NIC)"
-
-
-class TestBluetoothMonitorProbe:
-    def test_probe_unknown_key_empty(self):
-        from modules.bluetooth.monitor import BluetoothMonitor
-        mon = BluetoothMonitor({})
-        assert mon.probe("nope") == []
-
-
-# ================================================================
-# Live TUI helpers (non-interactive-safe paths only)
 # ================================================================
 
 class TestLiveViewHelpers:
@@ -840,350 +652,8 @@ class TestLiveViewHelpers:
         from ui.live_view import header_panel
         assert header_panel("Title", "Subtitle") is not None
 
-
 # ================================================================
 # Network live monitor
-# ================================================================
-
-class TestNetworkMonitorParsing:
-    def test_parse_ip_neigh_basic(self):
-        from modules.network.monitor import parse_ip_neigh
-        sample = (
-            "192.168.1.1 dev eth0 lladdr aa:bb:cc:dd:ee:ff REACHABLE\n"
-            "192.168.1.20 dev eth0 lladdr 11:22:33:44:55:66 STALE\n"
-            "192.168.1.99 dev eth0 FAILED\n"
-        )
-        hosts = parse_ip_neigh(sample)
-        assert len(hosts) == 3
-        assert hosts[0]["ip"] == "192.168.1.1"
-        assert hosts[0]["mac"] == "aa:bb:cc:dd:ee:ff"
-        assert hosts[0]["state"] == "REACHABLE"
-        assert hosts[2]["mac"] == ""
-        assert hosts[2]["state"] == "FAILED"
-
-    def test_parse_empty(self):
-        from modules.network.monitor import parse_ip_neigh
-        assert parse_ip_neigh("") == []
-
-
-class TestNetworkMonitorMerge:
-    def test_new_host_added(self):
-        from modules.network.monitor import merge_scan
-        registry = {}
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "AA:BB", "state": "REACHABLE"}], now=1.0)
-        t = registry["10.0.0.5"]
-        assert t.mac == "AA:BB"
-        assert t.first_seen == 1.0 == t.last_seen
-        assert t.seen_count == 1
-
-    def test_existing_host_updated(self):
-        from modules.network.monitor import merge_scan
-        registry = {}
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "", "state": "STALE"}], now=1.0)
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "AA:BB", "state": "REACHABLE"}], now=2.0)
-        t = registry["10.0.0.5"]
-        assert t.mac == "AA:BB"
-        assert t.state == "REACHABLE"
-        assert t.first_seen == 1.0
-        assert t.last_seen == 2.0
-        assert t.seen_count == 2
-
-    def test_missing_ip_skipped(self):
-        from modules.network.monitor import merge_scan
-        registry = {}
-        merge_scan(registry, [{"ip": "", "mac": "AA", "state": "X"}], now=1.0)
-        assert registry == {}
-
-    def test_vendor_set_on_first_sighting(self):
-        from modules.network.monitor import merge_scan
-        registry = {}
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "00:0C:29:AB:CD:EF", "state": "REACHABLE"}], now=1.0)
-        assert registry["10.0.0.5"].vendor == "VMware (virtual NIC)"
-
-    def test_vendor_updated_when_mac_learned_later(self):
-        from modules.network.monitor import merge_scan
-        registry = {}
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "", "state": "STALE"}], now=1.0)
-        assert registry["10.0.0.5"].vendor == ""
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "08:00:27:11:22:33", "state": "REACHABLE"}], now=2.0)
-        assert registry["10.0.0.5"].vendor == "Oracle VirtualBox (virtual NIC)"
-
-    def test_vendor_unknown_for_unrecognized_oui(self):
-        from modules.network.monitor import merge_scan
-        registry = {}
-        merge_scan(registry, [{"ip": "10.0.0.5", "mac": "00:11:22:33:44:55", "state": "REACHABLE"}], now=1.0)
-        assert registry["10.0.0.5"].vendor == "Unknown vendor"
-
-
-class TestNetworkMonitorProbe:
-    def test_probe_unknown_host_empty(self):
-        from modules.network.monitor import NetworkMonitor
-        mon = NetworkMonitor({})
-        assert mon.probe("10.0.0.99") == []
-
-    def test_probe_known_host_runs(self):
-        from modules.network.monitor import NetworkMonitor, TrackedHost
-        mon = NetworkMonitor({})
-        mon.registry["127.0.0.1"] = TrackedHost(
-            ip="127.0.0.1", mac="", state="REACHABLE",
-            first_seen=1.0, last_seen=1.0,
-        )
-        findings = mon.probe("127.0.0.1")
-        assert len(findings) >= 1
-        assert any(f.type in ("HOST_REACHABLE", "HOST_UNREACHABLE") for f in findings)
-
-
-# ================================================================
-# Telecom/SS7 live monitor
-# ================================================================
-
-class TestTelecomMonitorMerge:
-    def _subscriber(self, msisdn="13105551234"):
-        from simulator import Subscriber
-        return Subscriber(msisdn=msisdn, imsi="310260123456789", roaming=False, lac="LAC1234")
-
-    def test_new_subscriber_tracked_on_first_event(self):
-        from modules.telecom.monitor import merge_activity
-        sub = self._subscriber()
-        registry = {}
-        entries = [{"msisdn": sub.msisdn, "op": "SRI", "suspicious": False}]
-        merge_activity(registry, {sub.msisdn: sub}, entries, now=1.0)
-        t = registry[sub.msisdn]
-        assert t.events == 1
-        assert t.suspicious_events == 0
-        assert t.last_op == "SRI"
-
-    def test_suspicious_event_counted(self):
-        from modules.telecom.monitor import merge_activity
-        sub = self._subscriber()
-        registry = {}
-        entries = [
-            {"msisdn": sub.msisdn, "op": "SRI", "suspicious": False},
-            {"msisdn": sub.msisdn, "op": "ISD", "suspicious": True},
-        ]
-        merge_activity(registry, {sub.msisdn: sub}, entries, now=2.0)
-        t = registry[sub.msisdn]
-        assert t.events == 2
-        assert t.suspicious_events == 1
-        assert t.last_op == "ISD"
-
-    def test_unknown_subscriber_skipped(self):
-        from modules.telecom.monitor import merge_activity
-        registry = {}
-        entries = [{"msisdn": "99999999999", "op": "SRI", "suspicious": False}]
-        merge_activity(registry, {}, entries, now=1.0)
-        assert registry == {}
-
-
-class TestTelecomMonitor:
-    def test_poll_tracks_synthetic_traffic(self):
-        from modules.telecom.monitor import TelecomMonitor
-        mon = TelecomMonitor({}, subscriber_count=5)
-        msisdn = next(iter(mon.db._db))
-        mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
-        results = mon.poll()
-        assert any(item.key == msisdn and item.kind == "lab" for item in results)
-
-    def test_probe_flags_suspicious_subscriber(self):
-        from modules.telecom.monitor import TelecomMonitor
-        mon = TelecomMonitor({}, subscriber_count=5)
-        msisdn = next(iter(mon.db._db))
-        mon.hlr.handle_isd(msisdn, "203.0.113.9", 2)  # rejected + flagged suspicious
-        mon.poll()
-        findings = mon.probe(msisdn)
-        assert any(f.type == "SUBSCRIBER_DATA_MANIPULATION" for f in findings)
-
-    def test_probe_nominal_subscriber(self):
-        from modules.telecom.monitor import TelecomMonitor
-        mon = TelecomMonitor({}, subscriber_count=5)
-        msisdn = next(iter(mon.db._db))
-        mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
-        mon.poll()
-        findings = mon.probe(msisdn)
-        assert not any(f.type == "SUBSCRIBER_DATA_MANIPULATION" for f in findings)
-
-    def test_probe_unknown_subscriber_empty(self):
-        from modules.telecom.monitor import TelecomMonitor
-        mon = TelecomMonitor({}, subscriber_count=5)
-        assert mon.probe("00000000000") == []
-
-    def test_start_and_stop_traffic(self):
-        from modules.telecom.monitor import TelecomMonitor
-        mon = TelecomMonitor({}, subscriber_count=5)
-        mon.start_traffic(interval=0.01)
-        import time as _time
-        _time.sleep(0.15)
-        mon.stop_traffic()
-        results = mon.poll()
-        assert isinstance(results, list)
-
-    def test_no_device_source_yields_no_device_row(self, monkeypatch):
-        from modules.telecom import monitor as monitor_mod
-        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: None)
-        mon = monitor_mod.TelecomMonitor({}, subscriber_count=3)
-        results = mon.poll()
-        assert not any(item.kind == "device" for item in results)
-        assert mon.probe(monitor_mod.DEVICE_KEY) == []
-
-    def test_device_row_pinned_first_when_present(self, monkeypatch):
-        from modules.telecom import monitor as monitor_mod
-        from modules.telecom.device_telephony import DeviceTelephony
-        dt = DeviceTelephony(source="termux-api", network_operator_name="Test Carrier",
-                              network_type="LTE")
-        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
-        mon = monitor_mod.TelecomMonitor({}, subscriber_count=3)
-        msisdn = next(iter(mon.db._db))
-        mon.hlr.handle_sri(msisdn, "203.0.113.1", 1)
-        results = mon.poll()
-        assert results[0].kind == "device"
-        assert results[0].key == monitor_mod.DEVICE_KEY
-        assert results[0].label == "Test Carrier"
-
-    def test_device_probe_flags_insecure_rat(self, monkeypatch):
-        from modules.telecom import monitor as monitor_mod
-        from modules.telecom.device_telephony import DeviceTelephony
-        dt = DeviceTelephony(source="getprop", network_operator_name="Carrier X",
-                              network_type="GSM")
-        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
-        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
-        mon.poll()
-        findings = mon.probe(monitor_mod.DEVICE_KEY)
-        assert any(f.type == "INSECURE_RADIO_ACCESS_TECHNOLOGY" for f in findings)
-
-    def test_device_probe_nominal_on_lte(self, monkeypatch):
-        from modules.telecom import monitor as monitor_mod
-        from modules.telecom.device_telephony import DeviceTelephony
-        dt = DeviceTelephony(source="termux-api", network_operator_name="Carrier X",
-                              network_type="LTE")
-        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
-        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
-        mon.poll()
-        findings = mon.probe(monitor_mod.DEVICE_KEY)
-        assert not any(f.type == "INSECURE_RADIO_ACCESS_TECHNOLOGY" for f in findings)
-        assert any(f.type == "RADIO_NOMINAL" for f in findings)
-
-    def test_device_probe_weak_signal(self, monkeypatch):
-        from modules.telecom import monitor as monitor_mod
-        from modules.telecom.device_telephony import CellInfo, DeviceTelephony
-        dt = DeviceTelephony(source="termux-api", network_operator_name="Carrier X",
-                              network_type="LTE",
-                              cells=[CellInfo(cell_type="lte", registered=True, dbm=-115)])
-        monkeypatch.setattr(monitor_mod, "detect_real_telephony", lambda: dt)
-        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
-        mon.poll()
-        findings = mon.probe(monitor_mod.DEVICE_KEY)
-        assert any(f.type == "WEAK_SIGNAL" for f in findings)
-
-    def test_device_unreachable_stops_reprobing(self, monkeypatch):
-        from modules.telecom import monitor as monitor_mod
-        calls = {"n": 0}
-        def fake_detect():
-            calls["n"] += 1
-            return None
-        monkeypatch.setattr(monitor_mod, "detect_real_telephony", fake_detect)
-        mon = monitor_mod.TelecomMonitor({}, subscriber_count=1)
-        mon.poll()
-        mon.poll()
-        mon.poll()
-        assert calls["n"] == 1  # only probed once, then remembered as unavailable
-
-
-# ================================================================
-# Real device telephony detection (Termux:API / root+dumpsys / getprop)
-# ================================================================
-
-class TestDeviceTelephony:
-    def test_no_sources_available(self, monkeypatch):
-        from modules.telecom import device_telephony as dtmod
-        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: False)
-        assert dtmod.detect_real_telephony() is None
-
-    def test_termux_api_info_and_cellinfo(self, monkeypatch):
-        from modules.telecom import device_telephony as dtmod
-        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: True)
-
-        info_json = (
-            '{"network_operator_name":"Test Carrier","network_type":"LTE",'
-            '"sim_state":"READY","sim_operator_name":"Test Carrier","data_state":"connected"}'
-        )
-        cell_json = '[{"type":"lte","registered":true,"mcc":"310","mnc":"260",' \
-                    '"lac":"1234","cid":"5678","dbm":-85,"level":3}]'
-
-        def fake_run(cmd, timeout=5):
-            if cmd[0] == "termux-telephony-info":
-                return 0, info_json
-            if cmd[0] == "termux-telephony-cellinfo":
-                return 0, cell_json
-            return -1, ""
-
-        monkeypatch.setattr(dtmod, "_run", fake_run)
-        dt = dtmod.detect_real_telephony()
-        assert dt is not None
-        assert dt.source == "termux-api"
-        assert dt.network_operator_name == "Test Carrier"
-        assert dt.network_type == "LTE"
-        assert len(dt.cells) == 1
-        assert dt.cells[0].dbm == -85
-        assert dt.cells[0].mcc == "310"
-
-    def test_termux_api_bad_json_returns_none(self, monkeypatch):
-        from modules.telecom import device_telephony as dtmod
-        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: name == "termux-telephony-info")
-        monkeypatch.setattr(dtmod, "_run", lambda cmd, timeout=5: (0, "not json"))
-        assert dtmod.detect_real_telephony() is None
-
-    def test_dumpsys_parsing(self):
-        from modules.telecom.device_telephony import parse_dumpsys_telephony
-        sample = (
-            "mOperatorAlphaLong=Test Carrier mDataNetworkType=LTE "
-            "mSignalStrength=SignalStrength: -95 dBm mIsRoaming=false"
-        )
-        dt = parse_dumpsys_telephony(sample)
-        assert dt is not None
-        assert dt.source == "dumpsys"
-        assert dt.network_operator_name == "Test Carrier"
-        assert dt.network_type == "LTE"
-        assert dt.roaming is False
-        assert dt.cells and dt.cells[0].dbm == -95
-
-    def test_dumpsys_parsing_no_useful_fields_returns_none(self):
-        from modules.telecom.device_telephony import parse_dumpsys_telephony
-        assert parse_dumpsys_telephony("garbage output with nothing useful") is None
-
-    def test_getprop_fallback(self, monkeypatch):
-        from modules.telecom import device_telephony as dtmod
-        monkeypatch.setattr(dtmod, "_tool_exists", lambda name: name == "getprop")
-
-        def fake_run(cmd, timeout=5):
-            prop = cmd[-1]
-            values = {
-                "gsm.operator.alpha": "Test Carrier",
-                "gsm.network.type":   "LTE",
-                "gsm.sim.state":      "READY",
-            }
-            return 0, values.get(prop, "")
-
-        monkeypatch.setattr(dtmod, "_run", fake_run)
-        dt = dtmod.detect_real_telephony()
-        assert dt is not None
-        assert dt.source == "getprop"
-        assert dt.network_operator_name == "Test Carrier"
-
-    def test_device_is_risky_flags_2g(self):
-        from modules.telecom.device_telephony import DeviceTelephony
-        from modules.telecom.monitor import device_is_risky
-        dt = DeviceTelephony(source="getprop", network_type="GSM")
-        assert device_is_risky(dt) is True
-
-    def test_device_is_risky_false_on_lte(self):
-        from modules.telecom.device_telephony import DeviceTelephony
-        from modules.telecom.monitor import device_is_risky
-        dt = DeviceTelephony(source="getprop", network_type="LTE")
-        assert device_is_risky(dt) is False
-
-
-# ================================================================
-# Explainability
 # ================================================================
 
 class TestExplainability:

@@ -306,14 +306,8 @@ class WiFiScanner:
             else:
                 sec_level = "UNKNOWN"
             
-            # Override the network's security_level for analysis
-            original_security = net.security
-            net.security = sec_level  # Temporarily set for analysis
-            
-            lvl = net.security_level
-            
-            # Restore original security string
-            net.security = original_security
+            # The security level was already derived above; use it directly.
+            lvl = sec_level
             
             if lvl == "OPEN":
                 findings.append(Finding(
