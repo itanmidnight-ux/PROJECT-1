@@ -2,11 +2,12 @@
 
 # 🛡️ CyberScope AI Security Platform
 
-**Intelligent, modular WiFi security auditing with a guided 3-phase pentest engine**
+**Intelligent, capability-aware WiFi security auditing with a guided 3-phase pentest engine**
 
 `v2.0.0` · Linux · Kali / Debian / Arch / Alpine / Termux (Android)
 
 [![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Tests](https://img.shields.io/badge/Tests-178%20passed-2ea44f?style=for-the-badge&logo=pytest&logoColor=white)](https://docs.pytest.org)
 [![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Kali%20%7C%20Termux-006E74?style=for-the-badge&logo=linux&logoColor=white)](#)
 [![License](https://img.shields.io/badge/License-Authorized%20Use%20Only-CC0000?style=for-the-badge)](#-authorized-use--disclaimer)
 [![CLI](https://img.shields.io/badge/CLI-Full-0A7EA4?style=for-the-badge&logo=gnubash&logoColor=white)](#-command-line-interface)
@@ -16,12 +17,15 @@
 ---
 
 CyberScope is a **capability-aware WiFi security auditing platform**. It first
-probes the real hardware and privileges of the host — and only then offers the
-audits that are technically possible on that machine. Its flagship feature is a
-guided **3-phase attack pipeline** (Attack → Recon → Report) that chains real
-WiFi attack techniques — PMKID capture, WPS attacks, deauthentication + 4-way
-handshake capture, and offline cracking — into a single, cleanly gated workflow,
-and documents everything in a professional report.
+probes the real hardware, drivers and privileges of the host — and *only then*
+offers the audits that are technically possible on that machine. It never
+fakes an unavailable capability.
+
+Its flagship feature is a guided **3-phase attack pipeline** (Attack → Recon →
+Report) that chains real WiFi attack techniques — PMKID capture, WPS attacks,
+deauthentication + 4-way handshake capture, and offline cracking — into a
+single, cleanly phase-gated workflow, and documents everything in a
+professional report.
 
 > ⚠️ **Authorized use only.** This tool performs security assessments that must
 > only be run against **networks you own or are explicitly authorized to test**.
@@ -30,29 +34,50 @@ and documents everything in a professional report.
 
 ---
 
+## 📑 Table of Contents
+
+- [✨ Highlights](#-highlights)
+- [📦 Feature Matrix](#-feature-matrix)
+- [🏗️ Architecture](#️-architecture)
+- [🎯 The 3-Phase Attack Pipeline](#-the-3-phase-attack-pipeline)
+- [🚀 Installation](#-installation)
+- [🖥️ Usage](#️-usage)
+- [🛠️ Safety & Monitor Mode](#️-safety--monitor-mode)
+- [🧠 How Findings Are Analyzed](#-how-findings-are-analyzed)
+- [🧪 Testing](#-testing)
+- [🗂️ Configuration](#️-configuration)
+- [🔐 Authorized Use & Disclaimer](#-authorized-use--disclaimer)
+- [📄 License](#-license)
+
+---
+
 ## ✨ Highlights
 
 - 🔎 **Capability-aware** — detects interfaces, monitor-mode support and
-  privilege level before offering anything, and never fakes an unavailable
+  privilege level *before* offering anything, and never fakes an unavailable
   capability.
 - 🎯 **Guided 3-phase pentest** — *Phase 1: Attack & Access → Phase 2:
   Internal Recon → Phase 3: Report*, with strict phase gating (Phase 2 only
   runs if Phase 1 succeeded).
 - 🔒 **Safe by default** — active attacks that require monitor mode (PMKID,
   WPS, deauth) are **opt-in**; a clear warning is shown because switching to
-  monitor mode disconnects the current WiFi connection.
+  monitor mode disconnects the current WiFi connection. Monitor mode is
+  **never** enabled automatically.
 - ♻️ **Capture reuse** — existing handshake/PMKID captures on disk are found
-  and cracked offline first, with no network risk.
+  and cracked offline first, with zero network risk.
 - 🧠 **AI risk engine** — aggregates every finding into a 0–100 risk score,
   attack-surface mapping, executive summary and prioritized recommendations.
 - 🧾 **Professional reports** — Markdown, JSON and HTML output, including a
   dedicated phased-audit report.
 - ⚙️ **Auto-configuration** — verifies and reports WiFi tooling and
   monitor-mode readiness without ever disconnecting your network.
+- 🧪 **Battle-tested** — 178 automated tests covering types, discovery,
+  scanning/parsing, attack primitives, phase gating, the risk engine and
+  report generation.
 
 ---
 
-## 📦 Features
+## 📦 Feature Matrix
 
 | Area | What it does |
 |------|--------------|
@@ -63,7 +88,9 @@ and documents everything in a professional report.
 | **Deauth + handshake** | Deauthenticates clients with `aireplay-ng` while `airodump-ng` captures the 4-way handshake |
 | **Offline cracking** | `aircrack-ng` (CPU) or `hashcat` (GPU) dictionary attacks against captured material |
 | **Internal recon** | `nmap` host discovery + top-ports service scan across the connected subnet |
+| **Asset intelligence** | Persisted knowledge base of discovered devices with IEEE-802 MAC/OUI vendor identification |
 | **Auto-config** | Validates tools and monitor-mode readiness; installs missing packages |
+| **AI explainability** | Every finding explained in natural language with risk rationale |
 | **Reporting** | Markdown / JSON / HTML reports + dedicated phased-audit Markdown report |
 
 ---
@@ -92,7 +119,7 @@ cyberscope-ai-security/
 │
 ├── modules/
 │   ├── wifi/
-│   │   ├── scanner.py          # nmcli / iw based scanning + analysis
+│   │   ├── scanner.py          # nmcli / iw based scanning + security analysis
 │   │   └── monitor.py          # live scan registry + monitor-mode session
 │   └── pentest/                # ← the 3-phase attack engine
 │       ├── phased_attack.py    # orchestrator + Phase 1/2/3 integration
@@ -105,9 +132,29 @@ cyberscope-ai-security/
 │   └── live_view.py            # live TUI (rich.Live based)
 ├── reports/
 │   └── generator.py            # Markdown / JSON / HTML rendering
-├── tests/                      # pytest suite
+├── database/
+│   └── db.py                   # SQLite persistence
+├── tests/                      # 178-test pytest suite
 ├── reports/                    # generated reports (not committed)
-└── database/                   # SQLite persistence
+└── database/                   # SQLite store (not committed)
+```
+
+**Execution flow** — every audit runs the same pipeline:
+
+```
+   discover capabilities
+        │
+        ▼
+   privilege probe (root? monitor?)
+        │
+        ▼
+   run applicable modules ──► findings (typed, severity-tagged, MITRE mapped)
+        │
+        ▼
+   AI risk engine ──► 0-100 score + attack surface + recommendations
+        │
+        ▼
+   report generator ──► Markdown / JSON / HTML
 ```
 
 ---
@@ -333,18 +380,25 @@ Because CyberScope must not silently cut your connection, active attacks are
 
 ---
 
-## 🔐 Authorized Use & Disclaimer
+## 🧠 How Findings Are Analyzed
 
-CyberScope is a **security assessment tool**. Use it only on networks for
-which you hold **explicit written authorization**. Unauthorized scanning,
-capturing, or attacking of wireless networks may violate local laws
-(computer-misuse and wiretap statutes in most jurisdictions).
+Every module emits typed `Finding` objects carrying a severity, evidence,
+recommendation, source module and (where applicable) a MITRE ATT&CK
+technique ID. The **AI risk engine** then:
 
-- The authors provide this software for **educational and authorized
-  penetration-testing purposes only**.
-- You are solely responsible for ensuring your use complies with all
-  applicable laws and regulations.
-- No warranty is provided, express or implied; the tool is provided "as is".
+1. Scores each finding by severity.
+2. Maps the findings to an **attack surface** (WiFi, network, credentials, …).
+3. Computes a **0–100 risk score** with `HIGH ≥ 65`, `CRITICAL ≥ 85`.
+4. Generates an **executive summary** and **prioritized recommendations**.
+
+```
+Finding(type=WIFI_OPEN_NETWORK, severity=HIGH, mitre=T1040, …)
+   └─► RiskEngine
+         ├─ risk_score      = 47 / 100
+         ├─ risk_level      = MEDIUM
+         ├─ attack_surface  = ["wireless"]
+         └─ recommendations = ["Upgrade APs to WPA3", …]
+```
 
 ---
 
@@ -354,8 +408,9 @@ capturing, or attacking of wireless networks may violate local laws
 python3 -m pytest tests/ -q
 ```
 
-The suite covers core types, discovery, scanning/parsing, the pentest attack
-primitives, the phased-audit gating logic, the AI risk engine and report
+**178 tests** cover core types, discovery, scanning/parsing, the pentest
+attack primitives, the phased-audit gating logic, the AI risk engine, the
+asset manager, event bus, shell layer, network vendor ID and report
 generation.
 
 ---
@@ -368,9 +423,26 @@ discovery settings. The most commonly used knobs:
 - `wifi:` — default interface, scan duration, channel behavior.
 - `reports:` — output directory (`reports/` by default).
 - `discovery:` — capabilities JSON output path.
+- `ai:` — risk thresholds (`risk_threshold_high`, `risk_threshold_critical`).
+- `attack:` — PMKID / deauth / WPS / crack timeouts and wordlist path.
 
-Reports are written to `reports/` and are **not** committed to version
-control.
+Reports and the SQLite database are written at runtime and are **not**
+committed to version control.
+
+---
+
+## 🔐 Authorized Use & Disclaimer
+
+CyberScope is a **security assessment tool**. Use it only on networks for
+which you hold **explicit written authorization**. Unauthorized scanning,
+capturing, or attacking of wireless networks may violate local laws
+(computer-misuse and wiretap statutes in most jurisdictions).
+
+- The authors provide this software for **educational and authorized
+  penetration-testing purposes only**.
+- You are solely responsible for ensuring your use complies with all
+  applicable laws and regulations.
+- No warranty is provided, express or implied; the tool is provided "as is".
 
 ---
 
