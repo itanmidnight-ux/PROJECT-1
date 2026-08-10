@@ -1,16 +1,15 @@
-# CyberScope AI Security Platform — Configuration
+# CyberScope WiFi — Configuration
+# WiFi Security Auditing Platform
 
 platform:
-  name: "CyberScope AI Security Platform"
-  version: "1.0.0"
+  name: "CyberScope WiFi"
+  version: "2.0.0"
 
 logging:
   level: INFO
   file: logs/cyberscope.log
 
 discovery:
-  # Every run writes the full capability/privilege probe here so what
-  # this device can and can't do is always on record.
   capabilities_path: logs/capabilities.json
 
 database:
@@ -18,24 +17,22 @@ database:
 
 reports:
   output_dir: reports
-  formats: [json, html, markdown]
+  formats: [json, markdown]
 
 wifi:
-  scan_timeout: 10
-  passive_only: true
+  scan_timeout: 15
+  passive_only: false
+  monitor_mode: true
+  channels: "all"
+  scan_methods: ["nmcli", "iw", "iwlist"]
 
-bluetooth:
-  scan_timeout: 10
-  max_devices: 50
-
-network:
-  port_scan: false
-  interface: auto
-
-telecom:
-  mode: laboratory
-  sri_threshold: 10
-  isd_threshold: 3
+attack:
+  pmkid_timeout: 120
+  deauth_timeout: 60
+  wps_timeout: 300
+  crack_timeout: 300
+  wordlist: "/usr/share/wordlists/rockyou.txt"
+  use_hashcat: false
 
 ai:
   risk_threshold_high: 65

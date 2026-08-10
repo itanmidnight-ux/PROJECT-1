@@ -1,277 +1,381 @@
-# CyberScope AI Security Platform
+<div align="center">
 
-An intelligent, modular security auditing platform for Linux (including
-Termux/Android). CyberScope detects what capabilities a system actually has
-— WiFi, Bluetooth, network interfaces, SDR, root — and only offers the
-audits that are technically possible on that host. It runs detection
-modules, aggregates findings through a rule-based AI risk engine, and
-produces professional JSON/HTML/Markdown reports.
+# 🛡️ CyberScope AI Security Platform
 
-CyberScope evolved from the standalone `ss7-security-framework` project.
-That framework — SS7/SIGTRAN protocol modeling, HLR/VLR/MSC/SMSC
-simulation, MAP/TCAP/SCCP analysis — is preserved in full and now lives as
-the **Telecom Security module** inside this larger platform.
+**Intelligent, modular WiFi security auditing with a guided 3-phase pentest engine**
 
-> Authorized use only. CyberScope performs detection, analysis, and
-> reporting — it does not perform destructive or offensive actions
-> (no deauth, no injection, no exploitation).
+`v2.0.0` · Linux · Kali / Debian / Arch / Alpine / Termux (Android)
 
-## Architecture
+[![Python](https://img.shields.io/badge/Python-3.8%2B-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
+[![Platform](https://img.shields.io/badge/Platform-Linux%20%7C%20Kali%20%7C%20Termux-006E74?style=for-the-badge&logo=linux&logoColor=white)](#)
+[![License](https://img.shields.io/badge/License-Authorized%20Use%20Only-CC0000?style=for-the-badge)](#-authorized-use--disclaimer)
+[![CLI](https://img.shields.io/badge/CLI-Full-0A7EA4?style=for-the-badge&logo=gnubash&logoColor=white)](#-command-line-interface)
+
+</div>
+
+---
+
+CyberScope is a **capability-aware WiFi security auditing platform**. It first
+probes the real hardware and privileges of the host — and only then offers the
+audits that are technically possible on that machine. Its flagship feature is a
+guided **3-phase attack pipeline** (Attack → Recon → Report) that chains real
+WiFi attack techniques — PMKID capture, WPS attacks, deauthentication + 4-way
+handshake capture, and offline cracking — into a single, cleanly gated workflow,
+and documents everything in a professional report.
+
+> ⚠️ **Authorized use only.** This tool performs security assessments that must
+> only be run against **networks you own or are explicitly authorized to test**.
+> Unauthorized access to networks is illegal in most jurisdictions. See
+> [Authorized use & disclaimer](#-authorized-use--disclaimer).
+
+---
+
+## ✨ Highlights
+
+- 🔎 **Capability-aware** — detects interfaces, monitor-mode support and
+  privilege level before offering anything, and never fakes an unavailable
+  capability.
+- 🎯 **Guided 3-phase pentest** — *Phase 1: Attack & Access → Phase 2:
+  Internal Recon → Phase 3: Report*, with strict phase gating (Phase 2 only
+  runs if Phase 1 succeeded).
+- 🔒 **Safe by default** — active attacks that require monitor mode (PMKID,
+  WPS, deauth) are **opt-in**; a clear warning is shown because switching to
+  monitor mode disconnects the current WiFi connection.
+- ♻️ **Capture reuse** — existing handshake/PMKID captures on disk are found
+  and cracked offline first, with no network risk.
+- 🧠 **AI risk engine** — aggregates every finding into a 0–100 risk score,
+  attack-surface mapping, executive summary and prioritized recommendations.
+- 🧾 **Professional reports** — Markdown, JSON and HTML output, including a
+  dedicated phased-audit report.
+- ⚙️ **Auto-configuration** — verifies and reports WiFi tooling and
+  monitor-mode readiness without ever disconnecting your network.
+
+---
+
+## 📦 Features
+
+| Area | What it does |
+|------|--------------|
+| **WiFi scanning** | Nearby networks: SSID, BSSID, channel, band, signal, security type; risk-tagged |
+| **Live monitoring** | Auto-refreshing network registry with per-AP detail views |
+| **PMKID attack** | Captures the PMKID via `hcxdumptool`, converts with `hcxpcapngtool`, cracks with `hashcat` (mode 22000, legacy 16800 auto-converted) |
+| **WPS attack** | Pixie-Dust + brute-force PIN recovery via `reaver` / `wpspin` |
+| **Deauth + handshake** | Deauthenticates clients with `aireplay-ng` while `airodump-ng` captures the 4-way handshake |
+| **Offline cracking** | `aircrack-ng` (CPU) or `hashcat` (GPU) dictionary attacks against captured material |
+| **Internal recon** | `nmap` host discovery + top-ports service scan across the connected subnet |
+| **Auto-config** | Validates tools and monitor-mode readiness; installs missing packages |
+| **Reporting** | Markdown / JSON / HTML reports + dedicated phased-audit Markdown report |
+
+---
+
+## 🏗️ Architecture
 
 ```
-cyberscope/
-├── main.py                  # interactive + CLI entry point
-├── core/
-│   ├── engine.py             # orchestrator: discovery → modules → AI → DB → reports
-│   ├── discovery.py           # hardware/capability detection
-│   ├── permissions.py          # root/sudo/su privilege probing
-│   ├── shell.py                 # single shared subprocess/tool-exists layer
-│   ├── event_bus.py              # in-process pub/sub (asset observations, ...)
-│   ├── asset_manager.py           # persisted Asset knowledge base
-│   ├── net_vendor.py               # MAC classification + OUI vendor lookup
-│   ├── config.py                    # config.yaml loading with defaults
-│   └── types.py                      # Finding, ModuleResult, Severity, CapabilityInfo
-├── modules/
-│   ├── telecom/                # SS7 / SIGTRAN — the original framework
-│   │   ├── ss7_engine.py
-│   │   ├── protocols.py         # MAP / TCAP / SCCP / M3UA / SCTP / BER
-│   │   ├── analyzer.py            # anomaly detection + findings
-│   │   ├── simulator.py             # HLR / VLR / MSC / SMSC simulation
-│   │   ├── device_telephony.py      # real device radio state (Termux:API / root / getprop)
-│   │   └── monitor.py               # live subscriber-activity + device-radio registry
-│   ├── wifi/
-│   │   ├── scanner.py          # nmcli / iw / iwlist based scanning + analysis
-│   │   └── monitor.py          # live scan registry + monitor-mode toggle
-│   ├── bluetooth/
-│   │   ├── scanner.py          # hciconfig / bluetoothctl based scanning + analysis
-│   │   └── monitor.py          # live scan registry
-│   ├── network/
-│   │   ├── discovery.py        # interfaces, listening services, config
-│   │   └── monitor.py          # live ARP/NDP host registry + port probe
-│   └── device/system.py        # OS / CPU / kernel hardening checks
-├── ai/
-│   └── engine.py             # RiskEngine: scoring, attack surface, recommendations
-├── ui/
-│   └── live_view.py           # list → detail live TUI (rich.Live based)
-├── reports/
-│   └── generator.py          # JSON / HTML / Markdown report rendering
-├── database/
-│   └── db.py                  # SQLite persistence (sessions, findings, results)
-├── config.yaml
+cyberscope-ai-security/
+├── main.py                     # interactive menu + CLI entry point
+├── setup.sh                    # cross-platform installer (Termux/Debian/Arch/Alpine)
+├── config.yaml                 # configuration (interfaces, paths, scan options)
 ├── requirements.txt
-├── setup.sh
-└── tests/
+│
+├── core/                       # framework layer
+│   ├── engine.py               # orchestrator: discovery → modules → AI → reports
+│   ├── discovery.py            # hardware / capability detection
+│   ├── permissions.py          # root / sudo / su / tsu privilege probing
+│   ├── shell.py                # single, never-raising subprocess layer
+│   ├── auto_config.py          # WiFi auto-configuration actions
+│   ├── types.py                # Finding, ModuleResult, Severity, CapabilityInfo
+│   ├── config.py               # config.yaml loader
+│   ├── event_bus.py            # in-process pub/sub
+│   ├── asset_manager.py        # persisted asset knowledge base
+│   ├── net_vendor.py           # IEEE-802 MAC classification + OUI vendors
+│   └── authorization.py        # authorized-use guardrails
+│
+├── modules/
+│   ├── wifi/
+│   │   ├── scanner.py          # nmcli / iw based scanning + analysis
+│   │   └── monitor.py          # live scan registry + monitor-mode session
+│   └── pentest/                # ← the 3-phase attack engine
+│       ├── phased_attack.py    # orchestrator + Phase 1/2/3 integration
+│       ├── wifi_attack.py      # PMKID / WPS / deauth / crack / enum primitives
+│       └── wpa_capture.py      # capture-format handling
+│
+├── ai/
+│   └── engine.py               # RiskEngine: scoring, attack surface, recommendations
+├── ui/
+│   └── live_view.py            # live TUI (rich.Live based)
+├── reports/
+│   └── generator.py            # Markdown / JSON / HTML rendering
+├── tests/                      # pytest suite
+├── reports/                    # generated reports (not committed)
+└── database/                   # SQLite persistence
 ```
 
+---
+
+## 🎯 The 3-Phase Attack Pipeline
+
+The targeted-attack engine is the core of CyberScope. It is fully **phase-gated**:
+a phase only runs if the one before it succeeded, so no step is attempted on an
+invalid precondition.
+
 ```
-Telecom Security Module
-        │
-SS7 Analyzer
-        │
-Protocol Engine
-        │
-Reports
+                    ┌─────────────────────────────────────────────┐
+                    │        TARGETED ATTACK SELECTED            │
+                    │  BSSID · Channel · SSID · Wordlist          │
+                    └──────────────────┬──────────────────────────┘
+                                       │
+              ┌────────────────────────▼─────────────────────────┐
+              │  ⚠️ MONITOR-MODE CHECK (opt-in)                  │
+              │  Active attacks need monitor mode, which         │
+              │  DISCONNECTS the current WiFi connection.        │
+              │  [s] enable   |   [N] passive/offline only       │
+              └────────────────────────┬─────────────────────────┘
+                                       │
+              ┌────────────────────────▼─────────────────────────┐
+              │  PHASE 1 · ATTACK & ACCESS                       │
+              │  1. Reuse existing captures on disk (offline)    │
+              │     - crack handshake (aircrack-ng)              │
+              │     - crack PMKID   (hashcat mode 22000/16800)   │
+              │  2. If monitor enabled, active attacks:          │
+              │     PMKID → WPS → DEAUTH+handshake               │
+              │  3. Crack any newly captured material            │
+              └───────────────┬─────────────────────────────────┘
+                              │ success?
+              ┌───────────────▼──────────────┐        ┌─────────────┐
+              │ YES → creds obtained         │        │ NO → stopped│
+              │        ▼                     │        │  cleanly    │
+              │  PHASE 2 · INTERNAL RECON    │        └──────┬──────┘
+              │  (only if Phase 1 succeeded) │               │
+              │  - confirm connection (IP)   │               │
+              │  - nmap host discovery       │               │
+              │  - top-ports service scan    │               │
+              │        ▼                     │               │
+              │  PHASE 3 · REPORT            │◄──────────────┘
+              │  - always generated          │
+              └──────────────────────────────┘
 ```
 
-## Design principles
+### Phase 1 — Attack & Access
 
-- **Modularity** — each technology (WiFi, Bluetooth, network, telecom,
-  device) is an independent module behind a common `ModuleResult` contract.
-- **Intelligence, not guesswork** — `core/discovery.py` probes real
-  hardware (sysfs, `ip`, `iw`, `lsusb`, `/proc`) before anything is
-  offered. Unavailable capabilities are reported as unavailable with a
-  reason, never hidden or faked.
-- **Detect → Analyze → Report** — no destructive or offensive actions.
-- **Explainability** — every finding carries a description, evidence, and
-  a concrete recommendation.
+Strategically ordered to get credentials with minimal noise:
 
-## Privilege detection (`core/permissions.py`)
+1. **Offline capture reuse** — searches `/tmp/cyberscope_*` for existing
+   handshake (`.cap`) and PMKID (`.16800` / `.22000` / `.hccapx`) captures for
+   the **exact target BSSID** and cracks them immediately. No network risk.
+2. **PMKID** — attacks the AP directly (no client needed) using
+   `hcxdumptool`, converts the capture with `hcxpcapngtool` to hashcat format
+   and cracks it (`hashcat -m 22000`; legacy `16800` files are auto-converted).
+3. **WPS** — Pixie-Dust first (seconds), falling back to PIN brute force,
+   via `reaver`.
+4. **Deauth + handshake** — deauthenticates clients with `aireplay-ng` while
+   `airodump-ng` captures the WPA 4-way handshake, then cracks it offline.
 
-CyberScope never assumes root — it probes for it, the same way on plain
-Linux and Termux/Android:
+### Phase 2 — Internal Recon
 
-1. Already root (`euid == 0`)?
-2. Passwordless `sudo` available? (`sudo -n true` — this **never** prompts
-   for a password; it just fails immediately if one would be required)
-3. `su` already granted? (probed with stdin closed and a short timeout, so
-   it can't hang waiting on a password — on a rooted/Magisk device that's
-   already granted access it returns instantly)
-4. Termux's `tsu` wrapper present?
+Runs **only if Phase 1 succeeded**. Waits for the interface to obtain an IP,
+normalizes the subnet (e.g. `192.168.1.0/24`), performs an `nmap` host
+discovery sweep and a bounded top-ports service scan per host.
 
-None of this escalates anything — it only reports what's *already*
-possible, so modules that need elevated access (like WiFi monitor mode)
-know whether to offer it. The result is exposed as `caps.privileges` and
-shown in the capabilities table on startup.
+### Phase 3 — Report
 
-## Capabilities file
+Always generated. Produces a professional Markdown report covering both
+succeeded and failed phases, every attack attempt, discovered devices and any
+vulnerabilities.
 
-Every run writes the complete discovery + privilege result to
-`logs/capabilities.json` (path configurable under `discovery:` in
-`config.yaml`) — OS info, every interface, WiFi/Bluetooth/SDR status and
-reasons, monitor-mode support, and the privilege probe. This is the
-device's capability record: what CyberScope found, and why anything
-unavailable is unavailable.
+---
 
-## Asset Intelligence (`core/asset_manager.py`, `core/event_bus.py`)
+## 🚀 Installation
 
-Every identifiable thing a scan or live monitor observes — a WiFi AP's
-BSSID, a Bluetooth device's address, a LAN host's IP — becomes a
-persisted **Asset** in a dedicated `assets` table, surviving across
-sessions: type, vendor, interfaces, observed services, a risk level that
-only ever escalates (a quieter follow-up scan never erases a prior
-CRITICAL finding), first/last seen, and which sessions observed it.
-Menu option 7, "Base de datos de activos", lists everything known.
-
-Publishers (the WiFi/Bluetooth static scanners via `core/engine.py`, and
-the WiFi/Bluetooth/Network live monitors via `main.py`) don't call the
-asset manager directly — they publish an `ASSET_OBSERVED` event on
-`core/event_bus.py`, a small thread-safe pub/sub bus, and the single
-`AssetManager` instance `CyberScopeEngine` owns is subscribed to it. This
-keeps the modules that *find* things decoupled from the thing that
-*remembers* them.
-
-Vendor identification (`core/net_vendor.py`) is deliberately conservative
-about what it claims: `classify_mac()` derives locally-administered
-("randomized"/virtual) status directly from the IEEE 802 MAC bit layout —
-always correct, no lookup table involved, and it's exactly what modern
-MAC-randomization on phones and BLE produces. Actual vendor *names* only
-ever come from a small, high-confidence seed table (VMware, VirtualBox,
-QEMU/KVM, Xen — each platform's own well-documented default OUI prefix);
-an unmatched MAC is reported as "Unknown vendor", never guessed.
-
-## AI explainability (`ai/engine.py::RiskEngine.explain`)
-
-Beyond the aggregate risk score, every finding can be turned into a
-structured, plain-language explanation via `RiskEngine.explain(finding)`:
-**what** was observed, **why** it matters, the concrete **risk** if left
-unaddressed, and how to **fix** it — covering all finding types the
-platform's modules actually produce, not a generic template.
-
-## Live monitor mode (every module with something to list)
-
-The menu has one entry per module that has a natural list of "devices" to
-watch — **Network**, **WiFi**, **Bluetooth**, and **Telecom/SS7** — each
-gated by capability so it only appears when the device can actually do
-it. Picking one does both halves in sequence, not two separate menu
-items: first the static scan (so its findings still feed the AI risk
-engine, `Generar reporte`, and audit history), then a progress bar while
-the live detection engine starts, then an auto-refreshing, numbered list
-of what's actually there:
-
-| Module | List shows | Detail view adds |
-|---|---|---|
-| **Network** | IP, MAC, ARP state, times seen (from the kernel neighbor table — read-only, no packets sent) | ICMP reachability + a short, non-destructive TCP connect check of common ports |
-| **WiFi** | SSID, BSSID, signal, channel, security | first/last seen, times seen |
-| **Bluetooth** | name, address, classic/BLE, times seen | first/last seen, times seen |
-| **Telecom/SS7** | source (📱 real device / 🧪 lab sim), id, event count, alert flag — see below | operator/radio fields for the device row; roaming/LAC/last-op for lab subscribers |
-
-Typing a number "locks" onto that one item — a live-updating detail panel
-takes over showing every known field, plus the result of an automatic
-**non-destructive security probe** scoped to that single item (the same
-defensive analysis the one-shot scanner already runs — no connection
-attempt, no pairing, no exploitation, no payloads). Press `q` at any point
-to back out.
-
-For WiFi, if root/privileged access is available *and* the adapter's
-driver advertises monitor-mode support (checked via `iw list`), CyberScope
-can reversibly switch the interface into monitor mode for the session
-(`modules/wifi/monitor.py::MonitorModeSession`) and always restores it to
-managed mode on exit. Without root or driver support, it falls back to
-active scanning automatically — the header always shows which mode is in
-effect.
-
-### Telecom/SS7 live monitor — two clearly-labeled sources
-
-The Telecom/SS7 live monitor is always available, the same way the
-one-shot telecom scan is, and combines two data sources that are never
-mixed together or mistaken for one another:
-
-- **📱 Device (real)** — the actual cellular state of the device
-  CyberScope is running on, via `modules/telecom/device_telephony.py`.
-  Tried in order of how much access each needs, degrading gracefully
-  (a source that isn't reachable is simply skipped, never faked):
-  1. **Termux:API** (`pkg install termux-api` + the companion app) —
-     `termux-telephony-info` / `termux-telephony-cellinfo`. No root
-     needed beyond the one-time Android permission grant.
-  2. **Root** — `su -c "dumpsys telephony.registry"` on a rooted
-     device/Termux (e.g. Magisk). Best-effort text parsing since the
-     format varies by Android version.
-  3. **`getprop gsm.*`** — a handful of read-only properties available
-     without any special permission on most Android builds.
-
-  When reachable, it's pinned first in the list and refreshed live each
-  cycle (operator, network type, serving cell, signal). Its security
-  probe flags real, well-known mobile-security issues: registration on
-  a legacy 2G/GSM-class network (no mutual authentication — the
-  precondition for fake base station / IMSI-catcher attacks) and weak
-  signal that could push a fallback to a less secure network.
-
-- **🧪 Lab (simulado)** — the module's own laboratory simulator (no real
-  SIGTRAN/operator connectivity). A background generator drives
-  realistic synthetic subscriber activity — SendRoutingInfo,
-  UpdateLocation, occasional InsertSubscriberData attempts — against
-  the same HLR/VLR/SMSC handlers real MAP traffic would hit. The HLR
-  rejects and flags ISD attempts exactly like a real network element
-  would, and that's what the security probe surfaces per subscriber.
-
-To analyze *real captured* SS7 traffic (a PCAP from a SIGTRAN link),
-feed it through the existing `SS7Analyzer` (`modules/telecom/analyzer.py`)
-directly.
-
-## Quick start
+### Option A — Automated installer (recommended)
 
 ```bash
-./setup.sh                  # detects env (Termux/Debian/Arch/Alpine), installs deps, runs tests
-python3 main.py              # interactive menu
-python3 main.py --auto       # full auto-audit of all available modules
-python3 main.py --module wifi --report html
+git clone https://github.com/itanmidnight-ux/PROJECT-1.git
+cd PROJECT-1
+./setup.sh        # detects environment, installs deps, runs tests
 ```
 
-## Modules
+### Option B — Manual (Debian / Kali)
 
-| Module | Detects | Notes |
-|---|---|---|
-| **Network** | interfaces, listening services, promisc mode | via `ip`, `/proc/net` |
-| **WiFi** | nearby networks, security type, channel, signal | via `nmcli`/`iw`/`iwlist`; passive by default |
-| **Bluetooth** | adapters, nearby devices, BLE, discoverability | via sysfs, `hciconfig`, `bluetoothctl` |
-| **Device** | OS/kernel info, CPU, ASLR, firewall presence | via `/proc`, `/sys`, `sysctl` |
-| **Telecom/SS7** | MAP/TCAP/SCCP anomalies, SRI/ISD abuse, PCAP analysis | simulator always available; PCAP analysis when a capture is supplied |
-| **SDR** | RTL-SDR / HackRF / LimeSDR presence | reported unavailable when no compatible USB hardware is found |
+```bash
+sudo apt-get update
+sudo apt-get install -y python3 python3-pip \
+    aircrack-ng hcxtools reaver hashcat nmap iw \
+    wireless-tools wpasupplicant
+pip3 install -r requirements.txt
+```
 
-## AI Risk Engine (`ai/engine.py`)
+### Option C — Termux (Android)
 
-Aggregates findings from every module that ran into:
+```bash
+pkg install -y python python-pip aircrack-ng hcxtools reaver hashcat nmap iw
+pip install -r requirements.txt
+```
 
-- an overall **risk score** (0–100) and level (INFO → CRITICAL) with a
-  confidence rating based on how many modules contributed,
-- a mapped **attack surface** (wireless / Bluetooth / network / telecom /
-  exposed services),
-- a prioritized, **actionable recommendation list**,
-- an executive summary.
+### Required external tools
 
-## Reports (`reports/generator.py`)
+| Tool | Purpose | Used by |
+|------|---------|---------|
+| `nmcli` / `iw` / `iwlist` | Scanning, interface info | Scan, monitor |
+| `airodump-ng` / `aireplay-ng` / `aircrack-ng` | Handshake capture & crack | Phase 1 |
+| `airmon-ng` | Monitor-mode switching | Phase 1 (active) |
+| `hcxdumptool` / `hcxpcapngtool` | PMKID capture & conversion | Phase 1 |
+| `reaver` / `wash` | WPS attacks | Phase 1 |
+| `hashcat` | GPU/high-speed cracking | Phase 1 |
+| `nmap` | Network discovery | Phase 2 |
 
-Every audit can be exported as:
+> Missing tools are detected at audit start and an automatic `apt-get`
+> install is attempted. Unavailable optional tools degrade gracefully.
 
-- **JSON** — full machine-readable record (`meta`, `ai_analysis`, `module_results`)
-- **HTML** — dark-themed report with severity-colored findings table
-- **Markdown** — findings table + per-finding evidence/recommendation detail
+---
 
-Reports are written to `reports/` (configurable via `config.yaml`) and are
-not committed to version control.
+## 🖥️ Usage
 
-## Database
+### Interactive menu
 
-Audit sessions, findings, per-module results, and the asset knowledge
-base are persisted to SQLite (`database/cyberscope.db`) so
-`python3 main.py` → option 9 can show audit history and cumulative
-statistics, and option 7 can show every known asset, across runs.
+```bash
+python3 main.py
+```
 
-## Testing
+```
+┌────────── CyberScope WiFi — Main Menu ──────────┐
+│ 1  Scan Networks                                 │
+│ 2  Monitor Networks (live)                       │
+│ 3  Full Auto-Audit                               │
+│ 4  Targeted Attack   ← 3-phase pentest engine    │
+│ 5  Auto-Configuration                            │
+│ 6  Generate Report                               │
+│ q  Quit                                          │
+└──────────────────────────────────────────────────┘
+```
+
+The **Targeted Attack** flow walks you through:
+
+1. Network selection from the live scan table.
+2. Attack selection (`pmkid`, `deauth`, `wps`, `crack`, `enum`, or all).
+3. The **monitor-mode confirmation** panel (opt-in, disconnects WiFi).
+4. Phase 1 → Phase 2 → Phase 3 execution with live progress.
+5. A rich summary panel with per-phase results and attack-attempt table.
+
+### Command-line interface
+
+```bash
+# Full auto-audit of all available capabilities
+python3 main.py --auto
+
+# Scan nearby WiFi networks
+python3 main.py --scan
+
+# Live-monitor networks for 30s
+python3 main.py --monitor --duration 30
+
+# Targeted 3-phase attack (interactive network/attack selection)
+python3 main.py --attack
+
+# Targeted attack, non-interactive
+python3 main.py --attack \
+    --target "64:58:AD:88:9B:0B,8,ADC-cac7" \
+    --attacks "pmkid,crack" \
+    --wordlist /usr/share/wordlists/rockyou.txt
+
+# Auto-configuration (tooling + monitor readiness check)
+python3 main.py --autoconfig
+
+# Generate reports from the last audit
+python3 main.py --report all
+```
+
+#### CLI reference
+
+| Flag | Description |
+|------|-------------|
+| `--config, -c` | Path to `config.yaml` |
+| `--auto, -a` | Run a full auto-audit |
+| `--scan, -s` | Scan WiFi networks |
+| `--monitor, -m` | Live-monitor networks |
+| `--duration, -d` | Monitor duration in seconds (default `30`) |
+| `--attack` | Launch the targeted 3-phase attack |
+| `--target, -t` | `BSSID,CHANNEL,SSID` (comma-separated) |
+| `--attacks` | Comma-separated: `pmkid,deauth,wps,crack,enum` |
+| `--wordlist, -w` | Custom wordlist path |
+| `--autoconfig` | Run intelligent auto-configuration |
+| `--report, -r` | `json` / `markdown` / `all` |
+| `--interface, -i` | WiFi interface override |
+| `--verbose, -v` | Debug logging |
+
+---
+
+## 🛠️ Safety & Monitor Mode
+
+WiFi attacks fall into two categories:
+
+- **Passive / offline** (always safe) — scanning, capture reuse, offline
+  cracking, internal recon. These never touch the airwaves and never
+  disconnect you.
+- **Active** (monitor mode required) — PMKID capture, WPS, deauth + handshake.
+  These switch the interface to monitor mode, which **disconnects it from the
+  current network**.
+
+Because CyberScope must not silently cut your connection, active attacks are
+**always opt-in**:
+
+- A clear warning panel explains that a single-adapter machine will lose its
+  WiFi connection and that a **second USB adapter with monitor + injection
+  support** (Atheros / Ralink chipsets are typical) is recommended.
+- With **one adapter**: the interface disconnects for the duration of the
+  attack, then monitor mode is disabled and you reconnect manually — Phase 2
+  waits for you to confirm connectivity before running.
+- With **two adapters**: keep one connected (managed mode) and dedicate the
+  second to monitor mode.
+
+> CyberScope **never** enables monitor mode automatically — not in the
+> auto-configurator, and not without an explicit confirmation in the attack
+> flow.
+
+---
+
+## 🔐 Authorized Use & Disclaimer
+
+CyberScope is a **security assessment tool**. Use it only on networks for
+which you hold **explicit written authorization**. Unauthorized scanning,
+capturing, or attacking of wireless networks may violate local laws
+(computer-misuse and wiretap statutes in most jurisdictions).
+
+- The authors provide this software for **educational and authorized
+  penetration-testing purposes only**.
+- You are solely responsible for ensuring your use complies with all
+  applicable laws and regulations.
+- No warranty is provided, express or implied; the tool is provided "as is".
+
+---
+
+## 🧪 Testing
 
 ```bash
 python3 -m pytest tests/ -q
 ```
 
-Covers core types, discovery, every module's parsing/analysis logic, the
-AI risk engine, report generation, and the database layer.
+The suite covers core types, discovery, scanning/parsing, the pentest attack
+primitives, the phased-audit gating logic, the AI risk engine and report
+generation.
+
+---
+
+## 🗂️ Configuration
+
+`config.yaml` controls interfaces, scan options, report output paths and
+discovery settings. The most commonly used knobs:
+
+- `wifi:` — default interface, scan duration, channel behavior.
+- `reports:` — output directory (`reports/` by default).
+- `discovery:` — capabilities JSON output path.
+
+Reports are written to `reports/` and are **not** committed to version
+control.
+
+---
+
+## 📄 License
+
+**Authorized use only.** This project is provided for legal, authorized
+security testing and education. Redistribution requires retaining this notice
+and the authorized-use disclaimer above.

@@ -151,6 +151,93 @@ class RiskEngine:
         Severity.INFO:      1,
     }
 
+    # MITRE ATT&CK technique mapping for findings
+    _MITRE_MAP = {
+        # Network findings
+        "EXPOSED_SERVICE": "T1046",  # Network Service Scanning
+        "HOST_OPEN_PORTS": "T1046",
+        "INTERFACE_PROMISC": "T1040",  # Network Sniffing
+        "NEIGHBORS_FOUND": "T1016",  # System Network Configuration Discovery
+        "DUPLICATE_MAC": "T1557",  # Adversary-in-the-Middle
+        "MULTIPLE_DEFAULT_ROUTES": "T1599",  # Network Boundary Bridging
+        "SERVICE_VERSION_DISCLOSURE": "T1592",  # Gather Victim Host Information
+        "SERVICE_DEFAULT_CREDENTIALS": "T1589",  # Gather Victim Identity Information
+        
+        # WiFi findings
+        "WIFI_OPEN_NETWORK": "T1040",
+        "WIFI_WEP_NETWORK": "T1040",
+        "WIFI_WPA_TKIP": "T1040",
+        "WIFI_WPA2_NETWORK": "T1040",
+        "WIFI_WPA3_NETWORK": "T1040",
+        "WIFI_STRONG_SIGNAL": "T1040",
+        "WIFI_WEAK_SIGNAL": "T1040",
+        "WIFI_HIGH_OPEN_COUNT": "T1040",
+        "WIFI_NO_WPA3": "T1040",
+        "WIFI_HANDSHAKE_CAPTURED": "T1557",
+        "WPA_PASSPHRASE_WEAK": "T1110",  # Brute Force
+        
+        # Bluetooth findings
+        "BT_ADAPTER_DISCOVERABLE": "T1119",  # Automated Collection
+        "BT_DEVICES_FOUND": "T1016",
+        "BT_UNNAMED_DEVICES": "T1016",
+        "BLE_DEVICES_DETECTED": "T1016",
+        
+        # Device findings
+        "ASLR_DISABLED": "T1203",  # Exploitation for Client Execution
+        "NO_FIREWALL": "T1562",  # Impair Defenses
+        "WEAK_PASSWORD_POLICY": "T1110",  # Brute Force
+        "CORE_DUMP_PIPE": "T1005",  # Data from Local System
+        "HIGH_MEMORY_USAGE": "T1499",  # Endpoint Denial of Service
+        "KERNEL_DMESG_UNRESTRICTED": "T1592",
+        "KERNEL_KPTR_UNRESTRICTED": "T1592",
+        "KERNEL_BPF_UNRESTRICTED": "T1592",
+        "KERNEL_PTRACE_UNRESTRICTED": "T1055",  # Process Injection
+        "NET_NET_IPV4_CONF_ALL_SEND_REDIRECTS": "T1557",
+        "NET_NET_IPV4_CONF_ALL_ACCEPT_REDIRECTS": "T1557",
+        "NET_NET_IPV4_CONF_ALL_LOG_MARTIANS": "T1592",
+        "NET_NET_IPV4_CONF_ALL_RP_FILTER": "T1557",
+        "KERNEL_CMDLINE_SLAB_NOMERGE": "T1592",
+        "KERNEL_CMDLINE_PAGE_POISON": "T1592",
+        "KERNEL_CMDLINE_VSYSCALL": "T1592",
+        "KERNEL_CMDLINE_MODULE_SIG_ENFORCE": "T1592",
+        "KERNEL_CMDLINE_LOCKDOWN": "T1592",
+        "KERNEL_CMDLINE_INIT_ON_ALLOC": "T1592",
+        "KERNEL_CMDLINE_INIT_ON_FREE": "T1592",
+        "SECURE_BOOT_DISABLED": "T1542",  # Pre-OS Boot
+        "GRUB_NO_PASSWORD": "T1542",
+        "NO_INTEGRITY_CHECKER": "T1599",
+        "IMA_DISABLED": "T1592",
+        "CONTAINER_DETECTED": "T1592",
+        "CONTAINER_PID_NS_SHARED": "T1592",
+        "CONTAINER_USER_NS_DISABLED": "T1592",
+        
+        # Telecom findings
+        "SS7_MODULE_ACTIVE": "T1600",  # Wireless Communication Interception
+        "INSECURE_RADIO_ACCESS_TECHNOLOGY": "T1449",  # Fake Cell Tower
+        "DEVICE_ROAMING": "T1591",  # Location Tracking
+        "WEAK_SIGNAL": "T1449",
+        "RADIO_NOMINAL": "T1600",
+        "RESTRICTED_OPERATION": "T1600",
+        "SUBSCRIBER_DATA_MANIPULATION": "T1557",
+        "AUTH_VECTOR_REQUEST": "T1557",
+        "SRI_RATE_BURST": "T1590",  # Active Scanning
+        "SUBSCRIBER_TRACKING": "T1591",
+        "EXTERNAL_MAP_SCCP": "T1600",
+        "SUBSCRIBER_ROAMING": "T1591",
+        "SUBSCRIBER_NOMINAL": "T1600",
+        
+        # Pentest findings
+        "SERVICE_FINGERPRINTED": "T1592",
+        "WEAK_SSH_CREDENTIALS": "T1110",
+        "SSH_UNREACHABLE": "T1046",
+        "SSH_CREDENTIALS_NOT_WEAK": "T1046",
+        "WPA_CAPTURE_ERROR": "T1557",
+        "WPA_HANDSHAKE_NOT_CAPTURED": "T1557",
+        "WPA_HANDSHAKE_CAPTURED": "T1557",
+        "WPA_CRACK_ERROR": "T1557",
+        "WPA_PASSPHRASE_NOT_IN_DICTIONARY": "T1110",
+    }
+
     def analyze(self, results: List[ModuleResult]) -> AIReport:
         all_findings = [f for r in results for f in r.findings]
 

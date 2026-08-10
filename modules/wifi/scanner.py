@@ -129,19 +129,60 @@ class WiFiScanner:
         if rc != 0: return []
         nets = []
         for line in out.splitlines():
-            parts = line.split(":")
-            if len(parts) < 6: continue
-            ssid, bssid, chan, freq, sig, sec = parts[0], parts[1], parts[2], parts[3], parts[4], ":".join(parts[5:])
+            if not line.strip():
+                continue
+            # nmcli -t escapes colons as \: and backslashes as \\
+            # We need to parse carefully: split on unescaped colons
+            # First, replace escaped sequences with placeholders
+            line_escaped = line.replace("\\:", "\x01").replace("\\\\", "\x02")
+            parts = line_escaped.split(":")
+            # Restore escaped chars in each part
+            parts = [p.replace("\x01", ":").replace("\x02", "\\") for p in parts]
+            
+            if len(parts) < 6:
+                continue
+            ssid = parts[0]
+            bssid = parts[1]
+            chan = parts[2]
+            freq = parts[3]
+            sig = parts[4]
+            sec = ":".join(parts[5:])
+            
+            # Parse channel
             try:
-                nets.append(WiFiNetwork(
-                    ssid=ssid, bssid=bssid,
-                    channel=int(chan) if chan.isdigit() else 0,
-                    frequency=float(re.sub(r'[^\d.]','', freq)) if freq else 0,
-                    signal=int(re.sub(r'[^\d-]','', sig)) if sig else -100,
-                    security=sec.strip() or "OPEN",
-                ))
+                channel = int(chan) if chan.isdigit() else 0
             except ValueError:
-                pass
+                channel = 0
+            
+            # Parse frequency (MHz to GHz)
+            try:
+                freq_val = float(re.sub(r'[^\d.]', '', freq)) if freq else 0
+                if freq_val > 1000:  # MHz to GHz
+                    freq_val = freq_val / 1000
+            except ValueError:
+                freq_val = 0.0
+            
+            # Parse signal (nmcli quality 0-100 to dBm)
+            try:
+                signal_raw = int(re.sub(r'[^\d-]', '', sig)) if sig else -100
+                if signal_raw >= 0 and signal_raw <= 100:
+                    signal = -100 + (signal_raw * 0.7)
+                else:
+                    signal = signal_raw
+            except ValueError:
+                signal = -100
+            
+            security = sec.strip() or "OPEN"
+            security = re.sub(r'\s+', ' ', security).strip()
+            
+            nets.append(WiFiNetwork(
+                ssid=ssid or "<hidden>",
+                bssid=bssid,
+                channel=channel,
+                frequency=freq_val,
+                signal=signal,
+                security=security,
+            ))
         return nets
 
     def _scan_iw(self, iface: str) -> List[WiFiNetwork]:
@@ -243,14 +284,43 @@ class WiFiScanner:
     def _analyze(self, networks: List[WiFiNetwork]) -> List[Finding]:
         findings: List[Finding] = []
         for net in networks:
+            # Parse security string to determine actual security level
+            sec_upper = net.security.upper()
+            has_wpa3 = "WPA3" in sec_upper or "SAE" in sec_upper
+            has_wpa2 = "WPA2" in sec_upper or "RSN" in sec_upper or "CCMP" in sec_upper
+            has_wpa = "WPA" in sec_upper and not has_wpa2 and not has_wpa3
+            has_wep = "WEP" in sec_upper
+            is_open = "OPEN" in sec_upper or "NONE" in sec_upper or not sec_upper.strip()
+            
+            # Determine security level
+            if has_wpa3:
+                sec_level = "STRONG"
+            elif has_wpa2:
+                sec_level = "GOOD"
+            elif has_wpa:
+                sec_level = "WEAK"
+            elif has_wep:
+                sec_level = "BROKEN"
+            elif is_open:
+                sec_level = "OPEN"
+            else:
+                sec_level = "UNKNOWN"
+            
+            # Override the network's security_level for analysis
+            original_security = net.security
+            net.security = sec_level  # Temporarily set for analysis
+            
             lvl = net.security_level
-
+            
+            # Restore original security string
+            net.security = original_security
+            
             if lvl == "OPEN":
                 findings.append(Finding(
                     type="WIFI_OPEN_NETWORK",
                     severity=Severity.HIGH,
-                    description=f'Open WiFi network detected: "{net.ssid}"',
-                    evidence=f"BSSID={net.bssid} SSID={net.ssid} security=NONE",
+                    description=f'Open WiFi network detected: "{net.ssid}" ({net.security})',
+                    evidence=f"BSSID={net.bssid} SSID={net.ssid} security={net.security}",
                     recommendation=(
                         "Open networks transmit data unencrypted. "
                         "Do not connect to open networks for sensitive operations. "
@@ -281,19 +351,47 @@ class WiFiScanner:
                     recommendation="Upgrade to WPA2-AES or WPA3.",
                     module=self.MODULE,
                 ))
+            elif lvl == "GOOD":
+                findings.append(Finding(
+                    type="WIFI_WPA2_NETWORK",
+                    severity=Severity.LOW,
+                    description=f'WPA2 network: "{net.ssid}" — good security',
+                    evidence=f"BSSID={net.bssid} security={net.security}",
+                    recommendation="Consider upgrading to WPA3 for enhanced security.",
+                    module=self.MODULE,
+                ))
+            elif lvl == "STRONG":
+                findings.append(Finding(
+                    type="WIFI_WPA3_NETWORK",
+                    severity=Severity.INFO,
+                    description=f'WPA3 network: "{net.ssid}" — strong security',
+                    evidence=f"BSSID={net.bssid} security={net.security}",
+                    recommendation="WPA3 is the current best practice for WiFi security.",
+                    module=self.MODULE,
+                ))
 
+            # Signal strength analysis
             if net.signal > -40:
                 findings.append(Finding(
                     type="WIFI_STRONG_SIGNAL",
                     severity=Severity.INFO,
-                    description=f'Very strong signal from "{net.ssid}" ({net.signal} dBm)',
-                    evidence=f"signal={net.signal}dBm BSSID={net.bssid}",
+                    description=f'Very strong signal from "{net.ssid}" ({net.signal:.0f} dBm)',
+                    evidence=f"signal={net.signal:.0f}dBm BSSID={net.bssid}",
                     recommendation="Strong signal suggests the AP is nearby.",
                     module=self.MODULE,
                 ))
+            elif net.signal < -80:
+                findings.append(Finding(
+                    type="WIFI_WEAK_SIGNAL",
+                    severity=Severity.INFO,
+                    description=f'Weak signal from "{net.ssid}" ({net.signal:.0f} dBm)',
+                    evidence=f"signal={net.signal:.0f}dBm BSSID={net.bssid}",
+                    recommendation="Weak signal may indicate distance or obstruction.",
+                    module=self.MODULE,
+                ))
 
-        # Count open networks
-        open_count = sum(1 for n in networks if n.security_level in ("OPEN","BROKEN"))
+        # Count open/broken networks
+        open_count = sum(1 for n in networks if n.security_level in ("OPEN", "BROKEN"))
         if open_count > 3:
             findings.append(Finding(
                 type="WIFI_HIGH_OPEN_COUNT",
@@ -301,6 +399,19 @@ class WiFiScanner:
                 description=f"{open_count} insecure networks in range",
                 evidence=f"open_networks={open_count} total={len(networks)}",
                 recommendation="Be aware of your wireless environment.",
+                module=self.MODULE,
+            ))
+            
+        # Check for WPA3 adoption
+        wpa3_count = sum(1 for n in networks if "WPA3" in n.security.upper() or "SAE" in n.security.upper())
+        total = len(networks)
+        if total > 0 and wpa3_count == 0 and total > 5:
+            findings.append(Finding(
+                type="WIFI_NO_WPA3",
+                severity=Severity.LOW,
+                description=f"No WPA3 networks found among {total} detected networks",
+                evidence=f"wpa3_networks=0 total_networks={total}",
+                recommendation="Consider upgrading APs to WPA3 for improved security posture.",
                 module=self.MODULE,
             ))
 

@@ -1,7 +1,7 @@
 """
-CyberScope — core/engine.py
+CyberScope WiFi — core/engine.py
 
-Central orchestrator: connects discovery → modules → AI → database → reports.
+WiFi-only security auditing engine.
 """
 from __future__ import annotations
 
@@ -35,15 +35,14 @@ def _setup_logging(cfg: Dict[str, Any]) -> None:
 
 class CyberScopeEngine:
     """
-    Platform orchestrator.
+    WiFi-only platform orchestrator.
 
     Responsibilities:
     - Load configuration
     - Run system discovery
-    - Dispatch module scans
+    - Dispatch WiFi module scans
     - Run AI analysis
-    - Persist results
-    - Generate reports
+    - Persistributes of the scene and respond appropriately. The user wants me to continue the story as the GMK: "wifi" MODULES ONLY
     """
 
     def __init__(self, config_path: str = "config.yaml") -> None:
@@ -53,7 +52,6 @@ class CyberScopeEngine:
         self.capabilities: Optional[SystemCapabilities] = None
         self._results:     List[ModuleResult] = []
 
-        # Lazy imports to keep startup fast
         from database.db import CyberScopeDB
         from ai.engine   import RiskEngine
         from reports.generator import ReportGenerator
@@ -65,13 +63,9 @@ class CyberScopeEngine:
         self.events   = EventBus()
         self.assets   = AssetManager(self.db, self.events)
 
-        # Create the session row up front — module_results has a FK on
-        # sessions(id) and modules may run before analyze() finalizes it.
         self.db.save_session(self.session_id, mode="in_progress")
 
-        log.info(f"CyberScope Engine ready — session={self.session_id}")
-
-    # ── Discovery ─────────────────────────────────────────────────────────
+        log.info(f"CyberScope WiFi Engine ready — session={self.session_id}")
 
     def discover(self) -> SystemCapabilities:
         log.info("Running system discovery…")
@@ -83,8 +77,6 @@ class CyberScopeEngine:
         if saved:
             log.info(f"Capabilities report written to {saved}")
         return self.capabilities
-
-    # ── Module dispatch ───────────────────────────────────────────────────
 
     def run_module(self, module: str) -> ModuleResult:
         """Run a single named module and store its result."""
@@ -113,14 +105,6 @@ class CyberScopeEngine:
         return result
 
     def _publish_assets(self, module: str, result: ModuleResult) -> None:
-        """
-        Turn a module's raw scan data into Asset observations on the
-        event bus. Only wifi/bluetooth static scans currently carry
-        other-device identity data -- the network module's static scan
-        only describes this host's own interfaces, not other hosts on
-        the LAN; those are only visible via the live network monitor,
-        which publishes its own observations directly (see main.py).
-        """
         m = module.lower()
 
         if m == "wifi":
@@ -140,101 +124,118 @@ class CyberScopeEngine:
                     source="wifi_scanner",
                 ))
 
-        elif m == "bluetooth":
-            for dev in result.raw_data.get("devices", []):
-                address = dev.get("address")
-                if not address:
+        elif m == "wifi_attack":
+            for attack in result.raw_data.get("attacks_performed", []):
+                bssid = attack.get("target_bssid")
+                if not bssid:
                     continue
-                unnamed = dev.get("name") in ("", "Unknown", "Unknown BLE", None)
                 self.events.publish(Event(
                     type=ASSET_OBSERVED,
                     payload={
-                        "asset_type": "bluetooth_device", "identifier": address,
-                        "vendor": dev.get("vendor", ""), "interfaces": ["bluetooth"],
-                        "risk": "LOW" if unnamed else "INFO",
+                        "asset_type": "wifi_ap", "identifier": bssid,
+                        "vendor": attack.get("details", {}).get("vendor", ""), "interfaces": ["wifi"],
+                        "risk": "CRITICAL" if attack.get("success") else "INFO",
                         "session_id": self.session_id,
                     },
-                    source="bluetooth_scanner",
+                    source="wifi_attack",
                 ))
 
     def _dispatch_module(self, module: str) -> ModuleResult:
         m = module.lower()
 
-        if m == "network":
-            from modules.network.discovery import NetworkDiscovery
-            return NetworkDiscovery(self.cfg).run()
-
         if m == "wifi":
             from modules.wifi.scanner import WiFiScanner
             return WiFiScanner(self.cfg).run()
 
-        if m == "bluetooth":
-            from modules.bluetooth.scanner import BluetoothScanner
-            return BluetoothScanner(self.cfg).run()
+        if m == "wifi_monitor":
+            from modules.wifi.monitor import WiFiMonitor
+            mon = WiFiMonitor(self.cfg)
+            networks = mon.poll()
+            return ModuleResult(
+                module="wifi_monitor",
+                status=ModuleStatus.AVAILABLE if mon.available else ModuleStatus.UNAVAILABLE,
+                findings=[],
+                raw_data={
+                    "interface": mon.interface,
+                    "networks_found": len(networks),
+                    "networks": [vars(n) for n in networks],
+                },
+                duration_ms=0,
+            )
 
-        if m == "device":
-            from modules.device.system import DeviceAnalyzer
-            return DeviceAnalyzer(self.cfg).run()
+        if m == "wifi_attack":
+            from modules.pentest.wifi_attack import wifi_attack_available, run_full_wifi_audit
+            from core.discovery import detect_monitor_mode_support
+            from core.permissions import detect_privileges
 
-        if m == "telecom":
-            return self._run_telecom()
+            caps = self.capabilities or discover_all()
+            privs = detect_privileges()
+
+            if not caps.wifi.details:
+                return ModuleResult(
+                    module=m,
+                    status=ModuleStatus.UNAVAILABLE,
+                    raw_data={"reason": "No WiFi interface available"},
+                )
+
+            iface = caps.wifi.details.get("interfaces", [""])[0]
+            monitor_ok, reason = detect_monitor_mode_support(iface)
+
+            ok, reason = wifi_attack_available(privs, monitor_ok)
+            if not ok:
+                return ModuleResult(
+                    module=m,
+                    status=ModuleStatus.UNAVAILABLE,
+                    raw_data={"reason": reason},
+                )
+
+            return ModuleResult(
+                module=m,
+                status=ModuleStatus.LIMITED,
+                raw_data={"reason": "Requires target BSSID, channel, and attack types"},
+            )
+
+        if m == "wpa_capture":
+            from modules.pentest.wpa_capture import wpa_capture_available, CaptureResult, capture_handshake
+            from core.discovery import detect_monitor_mode_support
+            from core.permissions import detect_privileges
+
+            caps = self.capabilities or discover_all()
+            privs = detect_privileges()
+
+            if not caps.wifi.details:
+                return ModuleResult(
+                    module=m,
+                    status=ModuleStatus.UNAVAILABLE,
+                    raw_data={"reason": "No WiFi interface available"},
+                )
+
+            iface = caps.wifi.details.get("interfaces", [""])[0]
+            monitor_ok, reason = detect_monitor_mode_support(iface)
+
+            ok, reason = wpa_capture_available(privs, monitor_ok)
+            if not ok:
+                return ModuleResult(
+                    module=m,
+                    status=ModuleStatus.UNAVAILABLE,
+                    raw_data={"reason": reason},
+                )
+
+            return ModuleResult(
+                module=m,
+                status=ModuleStatus.LIMITED,
+                raw_data={"reason": "Requires target BSSID and channel"},
+            )
 
         raise ValueError(f"Unknown module: {module}")
 
-    def _run_telecom(self) -> ModuleResult:
-        """Wrap the SS7 engine as a CyberScope module result."""
-        import sys, os
-        # Ensure telecom subpackage is importable
-        telecom_dir = str(Path(__file__).parent.parent / "modules" / "telecom")
-        if telecom_dir not in sys.path:
-            sys.path.insert(0, telecom_dir)
-
-        from modules.telecom.analyzer import SS7Analyzer
-        from modules.telecom.simulator import SimulatedHLR, SubscriberDB
-        from core.types import Finding, Severity
-
-        # Minimal demo: show the module is active + functional
-        db  = SubscriberDB()
-        db.populate(10)
-        hlr = SimulatedHLR("127.0.0.1", 2905, db)
-
-        findings = [
-            Finding(
-                type="SS7_MODULE_ACTIVE",
-                severity=Severity.INFO,
-                description=(
-                    "Telecom / SS7 analysis module active. "
-                    "Use 'ss7audit analyze <pcap>' for full PCAP analysis."
-                ),
-                recommendation=(
-                    "Provide a PCAP file captured from a SIGTRAN link "
-                    "for detailed MAP threat detection."
-                ),
-                module="telecom",
-            )
-        ]
-
-        return ModuleResult(
-            module="telecom",
-            status=ModuleStatus.AVAILABLE,
-            findings=findings,
-            raw_data={
-                "ss7_opcodes": 20,
-                "simulator": "HLR/VLR/MSC/SMSC (loopback)",
-                "protocols": ["MAP","TCAP","SCCP","M3UA","SCTP","BER"],
-                "subscribers_loaded": 10,
-            },
-        )
-
-    # ── Auto-audit ────────────────────────────────────────────────────────
-
     def run_auto_audit(self, modules: Optional[List[str]] = None) -> List[ModuleResult]:
-        """Run all available modules in sequence."""
+        """Run all available WiFi modules in sequence."""
         if self.capabilities is None:
             self.discover()
 
         caps = self.capabilities
-        available = modules or caps.available_modules()  # type: ignore
+        available = modules or ["wifi", "wifi_monitor"]
         log.info(f"Auto-audit: running {available}")
 
         for mod in available:
@@ -242,14 +243,11 @@ class CyberScopeEngine:
 
         return self._results
 
-    # ── AI Analysis ───────────────────────────────────────────────────────
-
     def analyze(self):
         """Run AI risk engine over collected results."""
         from ai.engine import AIReport
         report = self.ai.analyze(self._results)
 
-        # Persist
         all_findings = [f.to_dict() for r in self._results for f in r.findings]
         self.db.save_session(
             self.session_id,
@@ -263,18 +261,12 @@ class CyberScopeEngine:
 
         return report
 
-    # ── Report generation ─────────────────────────────────────────────────
-
     def save_reports(self, ai_report, formats: Optional[List[str]] = None) -> Dict[str, str]:
-        fmts   = formats or self.cfg.get("reports", {}).get("formats", ["json","html","markdown"])
+        fmts   = formats or self.cfg.get("reports", {}).get("formats", ["json", "markdown"])
         paths: Dict[str, str] = {}
 
         if "json" in fmts:
             paths["json"] = self.reporter.save_json(
-                ai_report, self._results, self.session_id
-            )
-        if "html" in fmts:
-            paths["html"] = self.reporter.save_html(
                 ai_report, self._results, self.session_id
             )
         if "markdown" in fmts:
@@ -282,8 +274,6 @@ class CyberScopeEngine:
                 ai_report, self._results, self.session_id
             )
         return paths
-
-    # ── Convenience ───────────────────────────────────────────────────────
 
     @property
     def results(self) -> List[ModuleResult]:

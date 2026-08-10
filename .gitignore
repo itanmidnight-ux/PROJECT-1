@@ -9,6 +9,10 @@ database/*.db
 reports/cyberscope_report_*.json
 reports/cyberscope_report_*.html
 reports/cyberscope_report_*.md
+reports/cyberscope_phased_*.md
 
 .pytest_cache/
 /cyberscope
+
+# Local agent tooling directory
+.mimocode/
