@@ -2,6 +2,10 @@
 
 # 🛡️ CyberScope AI Security Platform
 
+> Auditoría de seguridad: [SECURITY_AUDIT.md](SECURITY_AUDIT.md)
+
+[![Project focus](https://readme-typing-svg.demolab.com?font=Inter&weight=700&size=20&duration=2600&pause=700&color=0A7EA4&center=true&vCenter=true&width=780&lines=Authorized+security+auditing;Capability-aware+WiFi+assessment;Evidence-first+security+reports)](https://github.com/itanmidnight-ux/PROJECT-1)
+
 **Intelligent, capability-aware WiFi security auditing with a guided 3-phase pentest engine**
 
 `v2.0.0` · Linux · Kali / Debian / Arch / Alpine / Termux (Android)
