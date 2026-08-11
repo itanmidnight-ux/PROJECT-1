@@ -5,6 +5,12 @@
 
 set -euo pipefail
 
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    echo "Uso: ./setup.sh"
+    echo "Instala las dependencias necesarias para CyberScope en el sistema detectado."
+    exit 0
+fi
+
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RED='\033[31m'; GRN='\033[32m'; YLW='\033[33m'; CYN='\033[36m'; NC='\033[0m'
 ok()   { echo -e "${GRN}[✓]${NC} $*"; }
