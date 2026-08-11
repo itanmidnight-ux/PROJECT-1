@@ -16,6 +16,14 @@
 
 ---
 
+## Public repository identity
+
+- **Recommended repository name:** `cyberscope-ai-security`
+- **Current repository:** `PROJECT-1`
+- **Positioning:** defensive security tooling for authorized WiFi/network assessments.
+
+---
+
 CyberScope is a **capability-aware WiFi security auditing platform**. It first
 probes the real hardware, drivers and privileges of the host — and *only then*
 offers the audits that are technically possible on that machine. It never
